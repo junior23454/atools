@@ -11,8 +11,14 @@ EnsureAdmin()
 ; Focus: reports, punishments, monitoring, settings
 ; =========================================================
 
-appVersion := "1.2.7"
+appVersion := ReadLocalAppVersion("1.0.0")
 appTitle := "ATools NextGen | 02"
+githubRepo := "junior23454/atools"
+githubBranch := "main"
+updateVersionUrl := "https://raw.githubusercontent.com/" githubRepo "/" githubBranch "/version.txt"
+updateZipUrl := "https://github.com/" githubRepo "/archive/refs/heads/" githubBranch ".zip"
+updateCheckIntervalMs := 60 * 60 * 1000
+updateInProgress := false
 previewIconPath := A_ScriptDir "\preview.ico"
 if FileExist(previewIconPath)
     try TraySetIcon(previewIconPath)
@@ -314,6 +320,7 @@ BuildGui()
 StartSoundMonitor()
 RegisterCommandHotkeys()
 RegisterReportHotkeys()
+StartAutoUpdateChecks()
 
 F2::AcceptLastAdminForm()
 F1::ReportPanelF1Action()
@@ -422,11 +429,147 @@ EnsureAdmin() {
     result := MsgBox("ATools NextGen | 02 потрібно запускати від імені адміністратора, інакше MTA може не приймати клавіші.`n`nПерезапустити з правами адміністратора?", "Потрібні права адміністратора", "YesNo Icon!")
     if (result = "Yes") {
         try {
-            Run("*RunAs " A_ScriptFullPath)
+            if A_IsCompiled
+                Run("*RunAs " QuoteArg(A_ScriptFullPath))
+            else
+                Run("*RunAs " QuoteArg(A_AhkPath) " " QuoteArg(A_ScriptFullPath))
             ExitApp()
         } catch {
             MsgBox("Не вдалося перезапустити з правами адміністратора. Запусти файл вручну через ПКМ → Запуск від імені адміністратора.", "ATools NextGen | 02", "Icon!")
         }
+    }
+}
+
+QuoteArg(value) {
+    return '"' StrReplace(value, '"', '\"') '"'
+}
+
+; =========================================================
+; Auto update
+; =========================================================
+
+ReadLocalAppVersion(defaultVersion := "1.0.0") {
+    versionPath := A_ScriptDir "\version.txt"
+    try {
+        if FileExist(versionPath) {
+            version := Trim(StrReplace(FileRead(versionPath, "UTF-8"), Chr(0xFEFF), ""), " `t`r`n")
+            if (version != "")
+                return version
+        }
+    }
+    return defaultVersion
+}
+
+StartAutoUpdateChecks() {
+    global updateCheckIntervalMs
+
+    SetTimer(() => CheckForUpdates(false), -2500)
+    SetTimer(() => CheckForUpdates(false), updateCheckIntervalMs)
+}
+
+CheckForUpdates(manual := false) {
+    global appVersion, updateVersionUrl, updateInProgress
+
+    if (updateInProgress)
+        return
+
+    updateInProgress := true
+    try {
+        localVersion := ReadLocalAppVersion(appVersion)
+        remoteVersion := DownloadText(updateVersionUrl)
+
+        if (remoteVersion = "") {
+            if manual
+                MsgBox("Не вдалося прочитати version.txt з GitHub.", "ATools Update", "Icon!")
+            return
+        }
+
+        if (CompareVersions(remoteVersion, localVersion) <= 0) {
+            if manual
+                ShowAtoolsNotice("У тебе актуальна версія v" localVersion ".")
+            return
+        }
+
+        answer := MsgBox("Доступне оновлення ATools.`n`nВстановлено: v" localVersion "`nДоступно: v" remoteVersion "`n`nОновити зараз?", "Оновлення ATools", "YesNo Iconi")
+        if (answer = "Yes")
+            InstallUpdate(remoteVersion)
+    } catch as err {
+        if manual
+            MsgBox("Не вдалося перевірити оновлення.`n`n" err.Message, "ATools Update", "Icon!")
+    } finally {
+        updateInProgress := false
+    }
+}
+
+DownloadText(url) {
+    tempFile := A_Temp "\atools_remote_version_" A_TickCount ".txt"
+    try {
+        Download(url, tempFile)
+        return Trim(StrReplace(FileRead(tempFile, "UTF-8"), Chr(0xFEFF), ""), " `t`r`n")
+    } finally {
+        try FileDelete(tempFile)
+    }
+}
+
+CompareVersions(leftVersion, rightVersion) {
+    leftParts := StrSplit(NormalizeVersion(leftVersion), ".")
+    rightParts := StrSplit(NormalizeVersion(rightVersion), ".")
+    partCount := Max(leftParts.Length, rightParts.Length)
+
+    Loop partCount {
+        leftPart := VersionPartToInt(leftParts.Length >= A_Index ? leftParts[A_Index] : "0")
+        rightPart := VersionPartToInt(rightParts.Length >= A_Index ? rightParts[A_Index] : "0")
+
+        if (leftPart > rightPart)
+            return 1
+        if (leftPart < rightPart)
+            return -1
+    }
+
+    return 0
+}
+
+NormalizeVersion(version) {
+    version := Trim(StrReplace(String(version), Chr(0xFEFF), ""), " `t`r`n")
+    return RegExReplace(version, "^[vV]\s*", "")
+}
+
+VersionPartToInt(part) {
+    part := RegExReplace(String(part), "\D.*$")
+    return (part = "") ? 0 : Integer(part)
+}
+
+InstallUpdate(remoteVersion) {
+    global updateZipUrl
+
+    updaterPath := A_ScriptDir "\tools\AToolsUpdater.ps1"
+    if !FileExist(updaterPath) {
+        MsgBox("Не знайдено updater: " updaterPath, "ATools Update", "Icon!")
+        return
+    }
+
+    zipPath := A_Temp "\ATools_Update_" A_Now "_" A_TickCount ".zip"
+    tempUpdaterPath := A_Temp "\AToolsUpdater_" A_TickCount ".ps1"
+
+    try {
+        Download(updateZipUrl, zipPath)
+        FileCopy(updaterPath, tempUpdaterPath, true)
+    } catch as err {
+        try FileDelete(zipPath)
+        try FileDelete(tempUpdaterPath)
+        MsgBox("Не вдалося завантажити оновлення v" remoteVersion ".`n`n" err.Message, "ATools Update", "Icon!")
+        return
+    }
+
+    ahkExe := A_IsCompiled ? "" : A_AhkPath
+    currentPid := DllCall("GetCurrentProcessId")
+    command := Format('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{1}" -ZipPath "{2}" -InstallDir "{3}" -LaunchPath "{4}" -AhkExe "{5}" -CallerPid {6}', tempUpdaterPath, zipPath, A_ScriptDir, A_ScriptFullPath, ahkExe, currentPid)
+
+    try {
+        Run(command, , "Hide")
+        ExitApp()
+    } catch as err {
+        MsgBox("Оновлення завантажено, але updater не запустився.`n`n" err.Message, "ATools Update", "Icon!")
     }
 }
 
@@ -3185,6 +3328,7 @@ BuildTray() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Перемкнути overlay Ctrl+F9", (*) => ToggleOverlayClickThrough())
     A_TrayMenu.Add("Звіт бонусів Ctrl+F10", (*) => AdminActivityTracker.GenerateBonusReport())
+    A_TrayMenu.Add("Перевірити оновлення", (*) => CheckForUpdates(true))
     A_TrayMenu.Add()
     A_TrayMenu.Add("Перезапуск", (*) => Reload())
     A_TrayMenu.Add("Вихід", (*) => ExitApp())
