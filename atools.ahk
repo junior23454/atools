@@ -1,7 +1,10 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
+#UseHook
+#MaxThreadsPerHotkey 1
 Persistent
 
+InstallKeybdHook()
 EnsureSingleInstance()
 EnsureAdmin()
 
@@ -318,8 +321,7 @@ BuildTray()
 ShowStartupLoader()
 BuildGui()
 StartSoundMonitor()
-RegisterCommandHotkeys()
-RegisterReportHotkeys()
+RegisterAllUserHotkeys()
 StartAutoUpdateChecks()
 
 F2::AcceptLastAdminForm()
@@ -1015,11 +1017,11 @@ BuildCommandsPage() {
         y := yStart + ((i - 1) * 24)
         edit := Main.AddEdit("x290 y" y " w420 h22 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(Commands, i, ""))
         hot1 := Main.AddHotkey("x725 y" y " w120 h22 c" Theme["text"], SafeArrayGet(CommandKeys, i, ""))
+        AttachHotkeyNormalizer(hot1)
         CommandEditCtrls.Push(AddPageCtrl("Commands", edit))
         CommandKeyCtrls.Push(AddPageCtrl("Commands", hot1))
         CommandKey2Ctrls.Push("")
-        idx := i
-        AddTextButton("Commands", 870, y - 1, 200, 23, "ВИКОНАТИ", (*) => RunCommandButton(idx))
+        AddTextButton("Commands", 870, y - 1, 200, 23, "ВИКОНАТИ", RunCommandButton.Bind(i))
     }
 
     Main.SetFont("s8 c" Theme["muted"], "Arial")
@@ -1032,7 +1034,7 @@ RunCommandButton(index) {
     if (CommandEditCtrls.Length >= index)
         Commands[index] := CommandEditCtrls[index].Text
     if (CommandKeyCtrls.Length >= index)
-        CommandKeys[index] := CommandKeyCtrls[index].Value
+        CommandKeys[index] := NormalizeUserHotkey(CommandKeyCtrls[index].Value)
     CommandKeys2[index] := ""
     cmd := Trim(SafeArrayGet(Commands, index, ""))
     if (cmd = "")
@@ -1068,6 +1070,7 @@ BuildReportsPage() {
             y := yStart + ((A_Index - 1) * rowH)
             edit := Main.AddEdit("x" colX[col] " y" y " w190 h22 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(Reports, idx, ""))
             hot := Main.AddHotkey("x" (colX[col] + 195) " y" y " w60 h22 c" Theme["text"], SafeArrayGet(ReportKeys, idx, ""))
+            AttachHotkeyNormalizer(hot)
             ReportEditCtrls.Push(AddPageCtrl("Reports", edit))
             ReportKeyCtrls.Push(AddPageCtrl("Reports", hot))
             idx++
@@ -1334,14 +1337,16 @@ ReadSettings() {
     Loop 30 {
         i := A_Index
         Commands[i] := IniRead(iniPath, "Command", "Com" (i - 1), SafeArrayGet(Commands, i, ""))
-        CommandKeys[i] := IniRead(iniPath, "Command", "keys" (i - 1), SafeArrayGet(CommandKeys, i, ""))
-        CommandKeys2[i] := IniRead(iniPath, "Command", "keys2" (i - 1), SafeArrayGet(CommandKeys2, i, ""))
+        CommandKeys[i] := NormalizeUserHotkey(IniRead(iniPath, "Command", "keys" (i - 1), SafeArrayGet(CommandKeys, i, "")))
+        CommandKeys2[i] := NormalizeUserHotkey(IniRead(iniPath, "Command", "keys2" (i - 1), SafeArrayGet(CommandKeys2, i, "")))
+        if (CommandKeys[i] = "" && CommandKeys2[i] != "")
+            CommandKeys[i] := CommandKeys2[i]
     }
 
     Loop 46 {
         i := A_Index
         Reports[i] := IniRead(iniPath, "Rep", "rep" (i - 1), SafeArrayGet(Reports, i, ""))
-        ReportKeys[i] := IniRead(iniPath, "Reports", "keys" (i + 29), SafeArrayGet(ReportKeys, i, ""))
+        ReportKeys[i] := NormalizeUserHotkey(IniRead(iniPath, "Reports", "keys" (i + 29), SafeArrayGet(ReportKeys, i, "")))
     }
     ReportVisibleCount := Max(26, Min(ReportMaxCount, Integer(IniRead(iniPath, "Reports", "VisibleCount", ReportVisibleCount))))
 
@@ -1388,13 +1393,13 @@ SaveCommands() {
     Loop CommandEditCtrls.Length {
         i := A_Index
         Commands[i] := CommandEditCtrls[i].Text
-        CommandKeys[i] := (CommandKeyCtrls.Length >= i) ? CommandKeyCtrls[i].Value : ""
+        CommandKeys[i] := (CommandKeyCtrls.Length >= i) ? NormalizeUserHotkey(CommandKeyCtrls[i].Value) : ""
         CommandKeys2[i] := ""
         IniWrite(Commands[i], iniPath, "Command", "Com" (i - 1))
         IniWrite(CommandKeys[i], iniPath, "Command", "keys" (i - 1))
         IniWrite("", iniPath, "Command", "keys2" (i - 1))
     }
-    RegisterCommandHotkeys()
+    RegisterAllUserHotkeys()
     ShowAtoolsNotice("Команди збережено.")
 }
 SaveReports() {
@@ -1402,12 +1407,12 @@ SaveReports() {
     Loop ReportEditCtrls.Length {
         i := A_Index
         Reports[i] := ReportEditCtrls[i].Text
-        ReportKeys[i] := ReportKeyCtrls[i].Value
+        ReportKeys[i] := NormalizeUserHotkey(ReportKeyCtrls[i].Value)
         IniWrite(Reports[i], iniPath, "Rep", "rep" (i - 1))
         IniWrite(ReportKeys[i], iniPath, "Reports", "keys" (i + 29))
     }
     IniWrite(ReportVisibleCount, iniPath, "Reports", "VisibleCount")
-    RegisterReportHotkeys()
+    RegisterAllUserHotkeys()
     ShowAtoolsNotice("Репорти збережено.")
 }
 
@@ -1559,27 +1564,248 @@ SelectUGTAFolder() {
 ; =========================================================
 
 RegisterCommandHotkeys() {
-    global CommandKeys
+    RegisterAllUserHotkeys()
+}
+
+RegisterReportHotkeys() {
+    RegisterAllUserHotkeys()
+}
+
+RegisterAllUserHotkeys() {
+    global CommandKeys, CommandKeys2, ReportKeys
     static oldKeys := []
 
     for _, key in oldKeys {
-        if (key != "") {
+        if (key != "")
             try Hotkey(key, "Off")
-        }
     }
     oldKeys := []
 
-    Loop 30 {
+    seen := Map()
+    Loop CommandKeys.Length {
         i := A_Index
-        key1 := SafeArrayGet(CommandKeys, i, "")
-        if (key1 != "") {
-            idx := i
-            try {
-                Hotkey(key1, (*) => RunCommand(idx), "On")
-                oldKeys.Push(key1)
-            }
+        callback := RunCommandHotkey.Bind(i)
+        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys, i, ""), callback, oldKeys, seen)
+        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys2, i, ""), callback, oldKeys, seen)
+    }
+
+    Loop ReportKeys.Length {
+        i := A_Index
+        callback := RunReportHotkey.Bind(i)
+        RegisterUserHotkeyVariants(SafeArrayGet(ReportKeys, i, ""), callback, oldKeys, seen)
+    }
+}
+
+RegisterUserHotkeyVariants(key, callback, registeredKeys, seen) {
+    key := NormalizeUserHotkey(key)
+    if (key = "")
+        return
+
+    for _, variant in ExpandHotkeyVariants(key) {
+        registeredKey := PrepareRegisteredHotkey(variant)
+        seenKey := StrLower(registeredKey)
+        if (seen.Has(seenKey))
+            continue
+        try {
+            Hotkey(registeredKey, callback, "On")
+            registeredKeys.Push(registeredKey)
+            seen[seenKey] := true
         }
     }
+}
+
+PrepareRegisteredHotkey(key) {
+    key := NormalizeUserHotkey(key)
+    if (key = "")
+        return ""
+    return InStr(key, "$") ? key : "$" key
+}
+
+ExpandHotkeyVariants(key) {
+    key := NormalizeUserHotkey(key)
+    variants := []
+    if (key = "")
+        return variants
+
+    base := HotkeyBaseName(key)
+    prefix := SubStr(key, 1, StrLen(key) - StrLen(base))
+    aliases := NumpadKeyAliases()
+    baseLower := StrLower(base)
+
+    if (aliases.Has(baseLower)) {
+        for _, alias in aliases[baseLower]
+            PushUniqueHotkey(variants, prefix alias)
+    } else {
+        PushUniqueHotkey(variants, key)
+    }
+    return variants
+}
+
+PushUniqueHotkey(arr, key) {
+    keyLower := StrLower(key)
+    for _, item in arr {
+        if (StrLower(item) = keyLower)
+            return
+    }
+    arr.Push(key)
+}
+
+AttachHotkeyNormalizer(ctrl) {
+    try ctrl.OnEvent("Change", NormalizeHotkeyControl)
+}
+
+NormalizeHotkeyControl(ctrl, *) {
+    try key := ctrl.Value
+    catch
+        return
+
+    normalized := NormalizePhysicalNumpadCapture(key)
+    if (normalized != "" && normalized != key) {
+        try ctrl.Value := normalized
+    }
+}
+
+NormalizePhysicalNumpadCapture(key) {
+    key := NormalizeUserHotkey(key)
+    if (key = "")
+        return ""
+
+    base := HotkeyBaseName(key)
+    prefix := SubStr(key, 1, StrLen(key) - StrLen(base))
+    numpadName := PhysicalNumpadNameFromNavigationKey(base)
+    return numpadName != "" ? prefix numpadName : key
+}
+
+PhysicalNumpadNameFromNavigationKey(key) {
+    static navToNumpad := ""
+    if !IsObject(navToNumpad) {
+        navToNumpad := Map(
+            "insert", "NumpadIns",
+            "ins", "NumpadIns",
+            "end", "NumpadEnd",
+            "down", "NumpadDown",
+            "pgdn", "NumpadPgDn",
+            "next", "NumpadPgDn",
+            "left", "NumpadLeft",
+            "clear", "NumpadClear",
+            "right", "NumpadRight",
+            "home", "NumpadHome",
+            "up", "NumpadUp",
+            "pgup", "NumpadPgUp",
+            "prior", "NumpadPgUp",
+            "delete", "NumpadDel",
+            "del", "NumpadDel"
+        )
+    }
+
+    keyLower := StrLower(key)
+    if (!navToNumpad.Has(keyLower))
+        return ""
+
+    numpadName := navToNumpad[keyLower]
+    try {
+        if GetKeyState(numpadName, "P")
+            return numpadName
+    }
+    return ""
+}
+
+HotkeyBaseName(key) {
+    key := NormalizeUserHotkey(key)
+    loop {
+        oldKey := key
+        if (SubStr(key, 1, 2) = "<^" || SubStr(key, 1, 2) = ">^"
+            || SubStr(key, 1, 2) = "<!" || SubStr(key, 1, 2) = ">!"
+            || SubStr(key, 1, 2) = "<+" || SubStr(key, 1, 2) = ">+"
+            || SubStr(key, 1, 2) = "<#" || SubStr(key, 1, 2) = ">#") {
+            key := SubStr(key, 3)
+        } else if (SubStr(key, 1, 1) = "^" || SubStr(key, 1, 1) = "!"
+            || SubStr(key, 1, 1) = "+" || SubStr(key, 1, 1) = "#"
+            || SubStr(key, 1, 1) = "*" || SubStr(key, 1, 1) = "~"
+            || SubStr(key, 1, 1) = "$") {
+            key := SubStr(key, 2)
+        }
+        if (key = oldKey)
+            break
+    }
+    return key
+}
+
+NumpadKeyAliases() {
+    static aliases := ""
+    if !IsObject(aliases) {
+        aliases := Map(
+            "numpad0", ["Numpad0", "NumpadIns"],
+            "numpadins", ["Numpad0", "NumpadIns"],
+            "numpad1", ["Numpad1", "NumpadEnd"],
+            "numpadend", ["Numpad1", "NumpadEnd"],
+            "numpad2", ["Numpad2", "NumpadDown"],
+            "numpaddown", ["Numpad2", "NumpadDown"],
+            "numpad3", ["Numpad3", "NumpadPgDn"],
+            "numpadpgdn", ["Numpad3", "NumpadPgDn"],
+            "numpad4", ["Numpad4", "NumpadLeft"],
+            "numpadleft", ["Numpad4", "NumpadLeft"],
+            "numpad5", ["Numpad5", "NumpadClear"],
+            "numpadclear", ["Numpad5", "NumpadClear"],
+            "numpad6", ["Numpad6", "NumpadRight"],
+            "numpadright", ["Numpad6", "NumpadRight"],
+            "numpad7", ["Numpad7", "NumpadHome"],
+            "numpadhome", ["Numpad7", "NumpadHome"],
+            "numpad8", ["Numpad8", "NumpadUp"],
+            "numpadup", ["Numpad8", "NumpadUp"],
+            "numpad9", ["Numpad9", "NumpadPgUp"],
+            "numpadpgup", ["Numpad9", "NumpadPgUp"],
+            "numpaddot", ["NumpadDot", "NumpadDel"],
+            "numpaddel", ["NumpadDot", "NumpadDel"]
+        )
+    }
+    return aliases
+}
+
+NumpadDisplayName(key) {
+    static names := ""
+    if !IsObject(names) {
+        names := Map(
+            "numpad0", "NUM0",
+            "numpadins", "NUM0",
+            "numpad1", "NUM1",
+            "numpadend", "NUM1",
+            "numpad2", "NUM2",
+            "numpaddown", "NUM2",
+            "numpad3", "NUM3",
+            "numpadpgdn", "NUM3",
+            "numpad4", "NUM4",
+            "numpadleft", "NUM4",
+            "numpad5", "NUM5",
+            "numpadclear", "NUM5",
+            "numpad6", "NUM6",
+            "numpadright", "NUM6",
+            "numpad7", "NUM7",
+            "numpadhome", "NUM7",
+            "numpad8", "NUM8",
+            "numpadup", "NUM8",
+            "numpad9", "NUM9",
+            "numpadpgup", "NUM9",
+            "numpaddot", "NUM.",
+            "numpaddel", "NUM."
+        )
+    }
+
+    keyLower := StrLower(key)
+    return names.Has(keyLower) ? names[keyLower] : ""
+}
+
+NormalizeUserHotkey(key) {
+    key := Trim(String(key))
+    if (key = "")
+        return ""
+    key := StrReplace(key, " ", "")
+    key := StrReplace(key, "$", "")
+    return key
+}
+
+RunCommandHotkey(index, *) {
+    RunCommand(index)
 }
 
 RunCommand(index) {
@@ -1587,41 +1813,27 @@ RunCommand(index) {
     cmd := SafeArrayGet(Commands, index, "")
     if (Trim(cmd) = "")
         return
-    SendCommandTextEx(cmd, true)
+    ReleaseHotkeyModifiers()
+    SendCommandTextEx(cmd, false)
 }
 
-RegisterReportHotkeys() {
-    global ReportKeys
-    static oldKeys := []
-
-    for _, key in oldKeys {
-        if (key != "") {
-            try Hotkey(key, "Off")
-        }
-    }
-    oldKeys := []
-
-    Loop 40 {
-        i := A_Index
-        key := SafeArrayGet(ReportKeys, i, "")
-        if (key != "") {
-            idx := i
-            try {
-                Hotkey(key, (*) => RunReport(idx), "On")
-                oldKeys.Push(key)
-            }
-        }
-    }
+RunReportHotkey(index, *) {
+    RunReport(index)
 }
 
 RunReport(index) {
     global Reports, Name, Rank
-    text := Reports[index]
+    text := SafeArrayGet(Reports, index, "")
     if (text = "")
         return
     text := StrReplace(text, "{Rank}", Rank)
     text := StrReplace(text, "{Name}", Name)
+    ReleaseHotkeyModifiers()
     SendInput(text)
+}
+
+ReleaseHotkeyModifiers() {
+    try SendEvent("{Ctrl up}{Alt up}{Shift up}{LWin up}{RWin up}")
 }
 
 SendCommandText(cmd) {
@@ -3166,7 +3378,7 @@ BindHintsSavePosition() {
 }
 
 HotkeyToText(key) {
-    key := Trim(key)
+    key := NormalizeUserHotkey(key)
     if (key = "")
         return ""
 
@@ -3180,13 +3392,11 @@ HotkeyToText(key) {
     if InStr(key, "#")
         out .= "Win+"
 
-    key := StrReplace(key, "^", "")
-    key := StrReplace(key, "!", "")
-    key := StrReplace(key, "+", "")
-    key := StrReplace(key, "#", "")
+    key := HotkeyBaseName(key)
     key := StrReplace(key, "sc013", "R")
 
-    return out . StrUpper(key)
+    numpadName := NumpadDisplayName(key)
+    return out . (numpadName != "" ? numpadName : StrUpper(key))
 }
 
 ToggleAdminCommandsHelp() {
