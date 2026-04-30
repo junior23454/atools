@@ -14,7 +14,7 @@ EnsureAdmin()
 ; Focus: reports, punishments, monitoring, settings
 ; =========================================================
 
-appVersion := ReadLocalAppVersion("1.0.0")
+appVersion := "1.0.2"
 appTitle := "ATools NextGen | 02"
 githubRepo := "junior23454/atools"
 githubBranch := "main"
@@ -92,7 +92,11 @@ LastReportPanelLineIndex := 0
 LastSoundLineIndex := 0
 LastReportSoundTick := 0
 CustomBgPath := ""
-WindowTransparency := 255
+BgAxHwnd := 0
+WindowTransparency := 245
+WindowResizeEnabled := false
+UiBuildMode := "stable" ; stable 1.0.2 = без градієнта, unstable 1.0.2 = з градієнтом
+MonitorCheckCtrls := Map()
 ChatsActiveTab := "Віп-чат"
 ChatsLastText := ""
 F2PosX := 20
@@ -176,6 +180,68 @@ EnsureUGTAOfficialAssets() {
         try Download(UGTA_LOGO_URL, logoFile)
 }
 
+AddAtoolsBackground(guiObj, x, y, w, h, bgPath) {
+    global Theme, BgAxHwnd
+    BgAxHwnd := 0
+
+    ; Важливо: фон має бути саме нижнім шаром. Ніяких суцільних Text-плашок поверх картинки,
+    ; бо вони перекривають PNG/JPG і виглядає так, ніби фон не ставиться.
+    if (bgPath != "" && FileExist(bgPath)) {
+        ext := StrLower(RegExReplace(bgPath, "^.*\."))
+        if (ext = "gif") {
+            ; Анімований GIF робимо через browser-control, але тримаємо його внизу,
+            ; вимикаємо для мишки і після побудови GUI ще раз кидаємо на задній план.
+            try {
+                ax := guiObj.AddActiveX("x" x " y" y " w" w " h" h " Disabled", "Shell.Explorer")
+                BgAxHwnd := ax.Hwnd
+                try ax.Value.Silent := true
+                try WinSetExStyle("+0x20", "ahk_id " ax.Hwnd) ; WS_EX_TRANSPARENT
+                ax.Value.Navigate("about:blank")
+                while ax.Value.Busy
+                    Sleep(10)
+                html := "<html><head><meta http-equiv='X-UA-Compatible' content='IE=edge'><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#060606;}img{width:100%;height:100%;object-fit:cover;filter:brightness(48%) saturate(85%);pointer-events:none;user-select:none;}</style></head><body><img src='" FileUrl(bgPath) "'></body></html>"
+                ax.Value.Document.Open()
+                ax.Value.Document.Write(html)
+                ax.Value.Document.Close()
+                SendBackgroundToBottom()
+            } catch {
+                BgAxHwnd := 0
+                SafeAddPicture(guiObj, "x" x " y" y " w" w " h" h, bgPath)
+            }
+        } else {
+            ; PNG/JPG/JPEG/WEBP/BMP — звичайний Picture-control. Він додається першим,
+            ; тому всі кнопки/тексти йдуть поверх нього.
+            SafeAddPicture(guiObj, "x" x " y" y " w" w " h" h, bgPath)
+        }
+    } else {
+        guiObj.AddText("x" x " y" y " w" w " h" h " Background" Theme["bg"], "")
+    }
+
+    ; Якщо у користувача є готова напівпрозора віньєтка — можна накласти її.
+    ; Якщо файлу немає, нічого не малюємо поверх фону, щоб не закривати картинку.
+    vignettePath := A_ScriptDir "\assets\bg\vignette_soft.png"
+    if FileExist(vignettePath)
+        SafeAddPicture(guiObj, "x" x " y" y " w" w " h" h, vignettePath)
+}
+
+SendBackgroundToBottom() {
+    global BgAxHwnd
+    if (!BgAxHwnd)
+        return
+    try {
+        ; HWND_BOTTOM = 1. SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE = 0x0013
+        DllCall("SetWindowPos", "ptr", BgAxHwnd, "ptr", 1, "int", 0, "int", 0, "int", 0, "int", 0, "uint", 0x0013)
+    }
+}
+
+FileUrl(path) {
+    p := StrReplace(path, "\", "/")
+    p := StrReplace(p, " ", "%20")
+    p := StrReplace(p, "#", "%23")
+    p := StrReplace(p, "'", "%27")
+    return "file:///" p
+}
+
 GetUGTABackgroundPath() {
     global CustomBgPath
     ; 1) Фон, який вибрав адміністратор у налаштуваннях.
@@ -196,8 +262,50 @@ GetUGTABackgroundPath() {
 }
 
 GetUGTALogoPath() {
+    ; Верхній логотип беремо саме з ugta_mark.png.
+    mark := A_ScriptDir "\assets\icons\ugta_mark.png"
+    if FileExist(mark)
+        return mark
     official02 := A_ScriptDir "\assets\icons\server02_logo.png"
     return official02
+}
+
+GetTintedLogoPath(sourcePath) {
+    global BaseThemeColor
+    if !FileExist(sourcePath)
+        return sourcePath
+
+    hex := NormalizeHexColor(BaseThemeColor, "8A22D6")
+    rBase := Integer("0x" SubStr(hex, 1, 2))
+    gBase := Integer("0x" SubStr(hex, 3, 2))
+    bBase := Integer("0x" SubStr(hex, 5, 2))
+    lumBase := Round((rBase * 0.299) + (gBase * 0.587) + (bBase * 0.114))
+
+    ; Якщо вибраний чорний/дуже темний колір, логотип робимо білим,
+    ; інакше на чорному фоні його майже не видно.
+    if (lumBase < 42)
+        hex := "FFFFFF"
+
+    outDir := A_ScriptDir "\assets\icons"
+    try DirCreate(outDir)
+    SplitPath(sourcePath, , , , &nameNoExt)
+    outPath := outDir "\" nameNoExt "_tinted_" hex ".png"
+    if FileExist(outPath)
+        return outPath
+
+    ; Створюємо кольоровий фільтр під вибраний колір тулсу.
+    ; Якщо PowerShell/.NET недоступний, тулс просто покаже оригінальний логотип.
+    ps1 := A_Temp "\atools_tint_logo.ps1"
+    script := "param([string]$src,[string]$hex,[string]$out)`n"
+        . "Add-Type -AssemblyName System.Drawing`n"
+        . "$img = [System.Drawing.Bitmap]::new($src)`n"
+        . "$c = [System.Drawing.ColorTranslator]::FromHtml('#' + $hex)`n"
+        . "for($y=0; $y -lt $img.Height; $y++){ for($x=0; $x -lt $img.Width; $x++){ $p=$img.GetPixel($x,$y); if($p.A -eq 0){continue}; $lum=[int](($p.R*0.299)+($p.G*0.587)+($p.B*0.114)); $boost=[Math]::Max(55,[Math]::Min(255,$lum)); $r=[Math]::Min(255,[int](($c.R*$boost/170)+22)); $g=[Math]::Min(255,[int](($c.G*$boost/170)+22)); $b=[Math]::Min(255,[int](($c.B*$boost/170)+22)); $img.SetPixel($x,$y,[System.Drawing.Color]::FromArgb($p.A,$r,$g,$b)) } }`n"
+        . "$img.Save($out, [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose()`n"
+    try FileDelete(ps1)
+    try FileAppend(script, ps1, "UTF-8")
+    try RunWait('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' ps1 '" "' sourcePath '" "' hex '" "' outPath '"', , "Hide")
+    return FileExist(outPath) ? outPath : sourcePath
 }
 
 
@@ -242,6 +350,31 @@ LastReportFollowAlertCount := 0
 ReportFollowNotifyGui := ""
 EnableAdminChatMonitor := false
 EnableBindHints := false
+
+; /menu — це не команда MTA, а hotstring самого тулсу.
+; Працює тільки коли у Моніторингу увімкнена галочка "ЧАТИ".
+; Стандартний hotstring працює у Windows, hook-клавіші нижче потрібні для MTA у рамці/повноекранному режимі.
+MenuHotSeq := ""
+MenuHotLastTick := 0
+MenuHotToggleTick := 0
+
+#HotIf EnableAdminChatMonitor
+; Ловимо саме фізичні клавіші, а не Windows-hotstring.
+; Так /menu працює у MTA, у рамці/безрамці/повноекранному вікні, але відкривається тільки після Enter.
+~*SC035::TrackMenuHotChars("/")      ; / на основній клавіатурі
+~*vkBF::TrackMenuHotChars("/")       ; / залежно від розкладки
+~*NumpadDiv::TrackMenuHotChars("/")  ; / на NumPad
+~*SC032::TrackMenuHotChars("m")      ; M
+~*SC012::TrackMenuHotChars("e")      ; E
+~*SC031::TrackMenuHotChars("n")      ; N
+~*SC016::TrackMenuHotChars("u")      ; U
+~*Space::ResetMenuHotChars()
+~*Enter::SubmitMenuHotChars()
+~*Esc::ResetMenuHotChars()
+~*Tab::ResetMenuHotChars()
+~*Backspace::ResetMenuHotChars()
+#HotIf
+
 LastPmId := ""
 AcceptedFormKeys := Map()
 FormSeenTicks := Map()
@@ -451,14 +584,7 @@ QuoteArg(value) {
 ; =========================================================
 
 ReadLocalAppVersion(defaultVersion := "1.0.0") {
-    versionPath := A_ScriptDir "\version.txt"
-    try {
-        if FileExist(versionPath) {
-            version := Trim(StrReplace(FileRead(versionPath, "UTF-8"), Chr(0xFEFF), ""), " `t`r`n")
-            if (version != "")
-                return version
-        }
-    }
+    ; У цій збірці версія зафіксована як 1.0.2, version.txt не перебиває її.
     return defaultVersion
 }
 
@@ -636,12 +762,17 @@ AtoolsTitleButtonHitTest(wParam, lParam, msg, hwnd) {
     }
 }
 
+UseGradientUI() {
+    global UiBuildMode
+    return (StrLower(Trim(UiBuildMode)) = "unstable")
+}
+
 BuildGui() {
     global Main, Theme, appTitle, appVersion, Pages, Controls, previewIconPath
 
     Main := Gui("-Caption +Border +MinSize1180x720", appTitle)
     Main.BackColor := Theme["bg"]
-    Main.SetFont("s10 c" Theme["text"], "Arial")
+    Main.SetFont("s10 bold c" Theme["text"], "Segoe UI")
     Main.MarginX := 0
     Main.MarginY := 0
     Main.OnEvent("Close", (*) => ExitApp())
@@ -650,21 +781,26 @@ BuildGui() {
     winH := 720
     sidebarW := 235
 
-    Main.AddText("x0 y0 w" sidebarW " h" winH " Background" Theme["sidebar"], "")
-
-    ; Офіційний фон Ukraine GTA: big-img.webp, локальний fallback вже затемнений.
-    ugtaBgPath := GetUGTABackgroundPath()
-    if FileExist(ugtaBgPath) {
-        SafeAddPicture(Main, "x" sidebarW " y26 w" (winW - sidebarW) " h" (winH - 26), ugtaBgPath)
-        overlayPath := A_ScriptDir "\\assets\\bg\\dark_overlay.png"
-        if FileExist(overlayPath)
-            SafeAddPicture(Main, "x" sidebarW " y26 w" (winW - sidebarW) " h" (winH - 26), overlayPath)
-        vignettePath := A_ScriptDir "\\assets\\bg\\vignette_bottom.png"
-        if FileExist(vignettePath)
-            SafeAddPicture(Main, "x" sidebarW " y26 w" (winW - sidebarW) " h" (winH - 26), vignettePath)
+    ; stable 1.0.2 = старий плоский стиль без градієнтів, unstable 1.0.2 = новий градієнтний стиль.
+    if UseGradientUI() {
+        AddGuiVerticalGradient(Main, 0, 0, sidebarW, 128, ShadeHex(Theme["accent"], 32), ShadeHex(Theme["accent"], -8), 72)
+        AddGuiVerticalGradient(Main, 0, 128, sidebarW, winH - 128, ShadeHex(Theme["accent2"], -2), ShadeHex(Theme["bg"], 4), 120)
+    } else {
+        Main.AddText("x0 y0 w" sidebarW " h" winH " Background" Theme["sidebar"], "")
+        Main.AddText("x0 y128 w" sidebarW " h" (winH - 128) " Background" ShadeHex(Theme["sidebar"], -18), "")
     }
+    Main.AddText("x0 y0 w5 h" winH " Background" Theme["accent"], "")
 
-    titleBar := Main.AddText("x" sidebarW " y0 w" (winW - sidebarW) " h26 Background" Theme["accent"], "")
+    ; Фон ATools: PNG/JPG/WEBP або анімований GIF. Поверх завжди йде віньєтка + затемнення.
+    ugtaBgPath := GetUGTABackgroundPath()
+    AddAtoolsBackground(Main, sidebarW, 26, winW - sidebarW, winH - 26, ugtaBgPath)
+
+    ; Верхня панель.
+    if UseGradientUI()
+        AddGuiHorizontalGradient(Main, sidebarW, 0, winW - sidebarW, 26, ShadeHex(Theme["accent"], 10), Theme["bg"], 72)
+    else
+        Main.AddText("x" sidebarW " y0 w" (winW - sidebarW) " h26 Background" Theme["accent2"], "")
+    titleBar := Main.AddText("x" sidebarW " y0 w" (winW - sidebarW) " h26 BackgroundTrans", "")
     titleBar.OnEvent("Click", (*) => DragMainWindow())
     Main.SetFont("s9 bold c" Theme["text"], "Arial")
     titleText := Main.AddText("x" sidebarW " y5 w" (winW - sidebarW) " h18 Center BackgroundTrans", "ATools NextGen | Ukraine GTA 02")
@@ -687,9 +823,10 @@ BuildGui() {
     ugtaLogoPath := GetUGTALogoPath()
     ugtaMarkPath := IconPath("ugta_mark")
 
-    if FileExist(ugtaLogoPath)
-        SafeAddPicture(Main, "x78 y10 w78 h78 BackgroundTrans", ugtaLogoPath)
-    else {
+    if FileExist(ugtaLogoPath) {
+        tintedLogoPath := GetTintedLogoPath(ugtaLogoPath)
+        SafeAddPicture(Main, "x78 y10 w78 h78 BackgroundTrans", tintedLogoPath)
+    } else {
         Main.SetFont("s16 bold c" Theme["text"], "Arial")
         Main.AddText("x24 y20 w160 h26 BackgroundTrans", "ATools")
         Main.SetFont("s8 c" Theme["muted"], "Arial")
@@ -704,13 +841,18 @@ BuildGui() {
     AddNavButton("Моніторинг", 24, 292, (*) => ShowPage("Monitoring"), "monitoring", "Monitoring")
     AddNavButton("Налаштування", 24, 337, (*) => ShowPage("Settings"), "settings", "Settings")
 
-    ; Bottom-left brand mark.
-    if FileExist(ugtaMarkPath)
-        SafeAddPicture(Main, "x26 y592 w44 h44 BackgroundTrans", ugtaMarkPath)
+    ; Bottom-left: повертаємо логотип 02. Верхній логотип лишається ugta_mark.png.
+    server02LogoPath := IconPath("server02_logo")
+    if !FileExist(server02LogoPath)
+        server02LogoPath := A_ScriptDir "\assets\icons\server02_logo.png"
+    if FileExist(server02LogoPath) {
+        tinted02Path := GetTintedLogoPath(server02LogoPath)
+        SafeAddPicture(Main, "x26 y592 w44 h44 BackgroundTrans", tinted02Path)
+    }
 
     Main.SetFont("s8 c" Theme["muted"], "Arial")
     Main.AddText("x78 y594 w130 h18 BackgroundTrans", "v" appVersion)
-    Main.SetFont("s10 c" Theme["text"], "Arial")
+    Main.SetFont("s10 bold c" Theme["text"], "Segoe UI")
     Main.AddText("x78 y616 w130 h22 BackgroundTrans", "UGTA Tools")
 
     Main.SetFont("s17 bold c" Theme["text"], "Arial")
@@ -736,34 +878,94 @@ BuildGui() {
 
     ShowPage("Dashboard")
     Main.Show("w" winW " h" winH)
+    SendBackgroundToBottom()
     OnMessage(0x200, WM_MOUSEMOVE_ATOOLS)
     FadeInMainWindow()
+    ApplyWindowTransparency()
     ; GDI+ shell disabled: основне вікно лишається стабільним AHK GUI. GDI+ — radial/overlay.
     SetGuiIcon(Main.Hwnd, previewIconPath)
 }
 
 AddNavButton(title, x, y, callback, iconName := "", pageName := "") {
     global Main, Theme, NavButtons
-    bg := Main.AddText("x0 y" y " w235 h34 Background" Theme["accent2"], "")
+
+    cb := WithClickSound(callback)
+
+    ; stable 1.0.2: плоскі кнопки. unstable 1.0.2: градієнтні кнопки.
+    strips := AddNavButtonGradient(y, pageName = "Dashboard")
+    for _, st in strips
+        st.OnEvent("Click", cb)
+
     marker := Main.AddText("x0 y" y " w5 h34 Background" Theme["text"], "")
     marker.Opt("Hidden")
+    marker.OnEvent("Click", cb)
+
+    ; Прозора зона кліку поверх градієнта, щоб натискалась вся ширина кнопки.
+    hit := Main.AddText("x0 y" y " w235 h34 +0x100 BackgroundTrans", "")
+    hit.OnEvent("Click", cb)
 
     if (iconName != "") {
         icon := AddIconPicture(Main, 24, y + 6, 20, 20, iconName)
         if IsObject(icon)
-            icon.OnEvent("Click", WithClickSound(callback))
+            icon.OnEvent("Click", cb)
     }
 
-    txt := Main.AddText("x54 y" (y + 8) " w158 h18 BackgroundTrans", title)
-    cb := WithClickSound(callback)
-    bg.OnEvent("Click", cb)
-    marker.OnEvent("Click", cb)
+    txt := Main.AddText("x54 y" (y + 8) " w158 h18 +0x100 BackgroundTrans", title)
     txt.OnEvent("Click", cb)
-    RegisterHover(bg, Theme["accent2"], ShadeHex(Theme["accent"], 22))
-    RegisterHover(txt, Theme["accent2"], ShadeHex(Theme["accent"], 22))
     txt.SetFont("s9 bold c" Theme["text"], "Arial")
+
+    ; Тонка лінія під кнопкою робить меню акуратнішим і прибирає відчуття грубих блоків.
+    line := Main.AddText("x5 y" (y + 33) " w230 h1 Background" ShadeHex(Theme["accent2"], -26), "")
+
     if (pageName != "")
-        NavButtons[pageName] := [bg, marker]
+        NavButtons[pageName] := [strips, marker, hit, txt, line]
+}
+
+AddNavButtonGradient(y, active := false) {
+    global Main, Theme
+    arr := []
+    if !UseGradientUI() {
+        color := active ? Theme["accent"] : Theme["accent2"]
+        arr.Push(Main.AddText("x5 y" y " w230 h34 Background" color, ""))
+        return arr
+    }
+
+    ; unstable: м'який перелив без грубих горизонтальних смуг.
+    segments := 17
+    segH := 2
+    top := active ? ShadeHex(Theme["accent"], 24) : ShadeHex(Theme["accent2"], 6)
+    mid := active ? ShadeHex(Theme["accent"], 2) : ShadeHex(Theme["accent2"], -6)
+    bot := active ? ShadeHex(Theme["accent"], -14) : ShadeHex(Theme["accent2"], -24)
+    Loop segments {
+        ratio := (A_Index - 1) / (segments - 1)
+        color := ratio < 0.50 ? MixHex(top, mid, ratio / 0.50) : MixHex(mid, bot, (ratio - 0.50) / 0.50)
+        arr.Push(Main.AddText("x5 y" (y + (A_Index - 1) * segH) " w230 h" segH " Background" color, ""))
+    }
+    return arr
+}
+
+SetNavButtonGradient(data, active := false) {
+    global Theme
+    try {
+        arr := data[1]
+        if !UseGradientUI() {
+            color := active ? Theme["accent"] : Theme["accent2"]
+            for _, ctrl in arr
+                ctrl.Opt("Background" color)
+            try data[5].Opt("Background" ShadeHex(color, -18))
+            return
+        }
+        top := active ? ShadeHex(Theme["accent"], 24) : ShadeHex(Theme["accent2"], 6)
+        mid := active ? ShadeHex(Theme["accent"], 2) : ShadeHex(Theme["accent2"], -6)
+        bot := active ? ShadeHex(Theme["accent"], -14) : ShadeHex(Theme["accent2"], -24)
+        total := arr.Length
+        for idx, ctrl in arr {
+            ratio := (total <= 1) ? 0 : (idx - 1) / (total - 1)
+            color := ratio < 0.50 ? MixHex(top, mid, ratio / 0.50) : MixHex(mid, bot, (ratio - 0.50) / 0.50)
+            ctrl.Opt("Background" color)
+        }
+    }
+    try data[5].Opt("Background" (active ? ShadeHex(Theme["accent"], 20) : ShadeHex(Theme["accent2"], -26)))
 }
 
 AddPageCtrl(page, ctrl) {
@@ -772,9 +974,47 @@ AddPageCtrl(page, ctrl) {
     return ctrl
 }
 
+AddGradientStrip(page, x, y, w, h, bottomColor, topColor, segments := 18) {
+    global Main
+    if !UseGradientUI() {
+        AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h" h " Background" bottomColor, ""))
+        return
+    }
+    ; unstable: вертикальний перелив.
+    segH := Max(1, Ceil(h / segments))
+    Loop segments {
+        ratio := (segments <= 1) ? 0 : (A_Index - 1) / (segments - 1)
+        color := MixHex(topColor, bottomColor, ratio)
+        yy := y + (A_Index - 1) * segH
+        AddPageCtrl(page, Main.AddText("x" x " y" yy " w" w " h" segH " Background" color, ""))
+    }
+    glow := MixHex(bottomColor, "FFFFFF", 0.18)
+    AddPageCtrl(page, Main.AddText("x" x " y" (y + h - 2) " w" w " h2 Background" glow, ""))
+}
+AddGuiVerticalGradient(guiObj, x, y, w, h, topColor, bottomColor, segments := 32) {
+    segH := Max(1, Ceil(h / segments))
+    Loop segments {
+        ratio := (segments <= 1) ? 0 : (A_Index - 1) / (segments - 1)
+        color := MixHex(topColor, bottomColor, ratio)
+        yy := y + (A_Index - 1) * segH
+        guiObj.AddText("x" x " y" yy " w" w " h" segH " Background" color, "")
+    }
+}
+
+AddGuiHorizontalGradient(guiObj, x, y, w, h, leftColor, rightColor, segments := 32) {
+    segW := Max(1, Ceil(w / segments))
+    Loop segments {
+        ratio := (segments <= 1) ? 0 : (A_Index - 1) / (segments - 1)
+        color := MixHex(leftColor, rightColor, ratio)
+        xx := x + (A_Index - 1) * segW
+        guiObj.AddText("x" xx " y" y " w" segW " h" h " Background" color, "")
+    }
+}
+
+
 AddHero(page, x, y, w, h, title, subtitle) {
     global Main, Theme
-    AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h18 Background" Theme["accent"], ""))
+    AddGradientStrip(page, x, y, w, 18, Theme["accent"], Theme["accent2"])
     AddPageCtrl(page, Main.AddText("x" x " y" (y+18) " w" w " h" (h-18) " " PanelBgOpt(), ""))
     AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h1 Background" Theme["line"], ""))
     AddPageCtrl(page, Main.AddText("x" x " y" (y + h - 1) " w" w " h1 Background" Theme["line"], ""))
@@ -798,10 +1038,10 @@ AddHero(page, x, y, w, h, title, subtitle) {
 AddCard(page, x, y, w, h, title) {
     global Main, Theme
     AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h" h " " PanelBgOpt(), ""))
-    AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h23 Background" Theme["accent2"], ""))
+    AddGradientStrip(page, x, y, w, 23, Theme["accent"], Theme["accent2"])
     AddPageCtrl(page, Main.AddText("x" x " y" y " w" w " h1 Background" Theme["line"], ""))
     AddPageCtrl(page, Main.AddText("x" x " y" (y + h - 1) " w" w " h1 Background" Theme["line"], ""))
-    Main.SetFont("s10 c" Theme["text"], "Arial")
+    Main.SetFont("s10 bold c" Theme["text"], "Segoe UI")
     AddPageCtrl(page, Main.AddText("x" x " y" (y + 4) " w" w " h16 Center BackgroundTrans", title))
 }
 
@@ -850,10 +1090,11 @@ UpdateNavActive(pageName) {
     global NavButtons, Theme, ActiveNavPage
     ActiveNavPage := pageName
     for pg, data in NavButtons {
-        try data[1].Opt("Background" (pg = pageName ? Theme["accent"] : Theme["accent2"]))
+        SetNavButtonGradient(data, pg = pageName)
         try data[2].Opt(pg = pageName ? "-Hidden" : "Hidden")
     }
 }
+
 
 PageSwitchPulse() {
     return
@@ -878,11 +1119,22 @@ BuildDashboardPage() {
         noteY := 525
     }
 
-    AddCard("Dashboard", 265, systemY, 850, 160, "Що нового?")
+    AddCard("Dashboard", 265, systemY, 850, 160, "Change Log")
     Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Dashboard", Main.AddText("x290 y" (systemY + 45) " w760 h22 BackgroundTrans", "• Додано розділ Команди."))
-    AddPageCtrl("Dashboard", Main.AddText("x290 y" (systemY + 75) " w760 h22 BackgroundTrans", "• Вікно форм F2 стало компактним і саме росте під кількість форм."))
-    AddPageCtrl("Dashboard", Main.AddText("x290 y" (systemY + 105) " w760 h22 BackgroundTrans", "• CapsLock працює звичайно, якщо radial-меню вимкнено."))
+    changeLogText := "v1.0.2`r`n"
+        . "• Виправлено прозорість інтерфейсу.`r`n"
+        . "• Auto ID PM / F2 / підказки коректно вимикаються після закриття вікна.`r`n"
+        . "• /menu відкриває/закриває меню після Enter; фон GIF/PNG/JPG.`r`n"
+        . "• Прозорість працює як цілісна прозорість головного вікна, без висвітлення плашок.`r`n"
+        . "• Change Log зроблено у форматі вікна з прокруткою.`r`n"
+        . "• Кнопку Шлях встановлення створено.`r`n"
+        . "• Додано вибір stable/unstable 1.0.2: stable без градієнта, unstable з градієнтом."
+    changeLogLines := StrSplit(StrReplace(changeLogText, "`r", ""), "`n")
+    cl := Main.AddListBox("x290 y" (systemY + 42) " w790 h95 Background" Theme["field"] " c" Theme["text"] " -Multi", changeLogLines)
+    cl.SetFont("s9 bold c" Theme["text"], "Arial")
+    ; ListBox лишається тільки для читання: текст не редагується і нормально прокручується.
+    ; Не ставимо Main.Focus(), бо в AHK v2 у Gui немає такого методу.
+    AddPageCtrl("Dashboard", cl)
 
     AddDashboardSetupNote(noteY)
 }
@@ -897,7 +1149,7 @@ AddDashboardSetupNote(noteY) {
     DashboardSetupNoteCtrls.Push(AddPageCtrl("Dashboard", Main.AddText("x265 y" noteY " w850 h23 Background" Theme["accent2"], "")))
     DashboardSetupNoteCtrls.Push(AddPageCtrl("Dashboard", Main.AddText("x265 y" noteY " w850 h1 Background" Theme["line"], "")))
     DashboardSetupNoteCtrls.Push(AddPageCtrl("Dashboard", Main.AddText("x265 y" (noteY + 91) " w850 h1 Background" Theme["line"], "")))
-    Main.SetFont("s10 c" Theme["text"], "Arial")
+    Main.SetFont("s10 bold c" Theme["text"], "Segoe UI")
     DashboardSetupNoteCtrls.Push(AddPageCtrl("Dashboard", Main.AddText("x265 y" (noteY + 4) " w850 h16 Center BackgroundTrans", "Примітка")))
     Main.SetFont("s9 c" Theme["muted"], "Arial")
     DashboardSetupNoteCtrls.Push(AddPageCtrl("Dashboard", Main.AddText("x290 y" (noteY + 42) " w790 h22 BackgroundTrans", "Для коректної роботи вкажи нікнейм, дату призначення та папку Ukraine GTA у налаштуваннях.")))
@@ -997,11 +1249,11 @@ AddActionButton(page, title, x, y, callback) {
 
 BuildCommandsPage() {
     global Main, Theme, Commands, CommandKeys, CommandEditCtrls, CommandKeyCtrls, CommandKey2Ctrls
-    AddHero("Commands", 265, 98, 850, 78, "Команди", "Шаблони службових команд: команда + одна кнопка або кнопка виконання")
+    AddHero("Commands", 265, 98, 850, 78, "Команди", "Шаблони службових команд: команда + гаряча клавіша")
     AddCard("Commands", 265, 200, 850, 430, "Шаблони команд")
     AddIconPicture(Main, 285, 202, 18, 18, "hotkey", "Commands")
     Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Commands", Main.AddText("x290 y240 w760 h30 BackgroundTrans", "Вписуй команду без /. Можна забіндити одну клавішу. Кнопка ВИКОНАТИ відправляє команду в чат."))
+    AddPageCtrl("Commands", Main.AddText("x290 y240 w760 h30 BackgroundTrans", "Вписуй команду без /. Можна забіндити клавішу, команда відправиться без автоматичного Enter."))
 
     CommandEditCtrls := []
     CommandKeyCtrls := []
@@ -1009,7 +1261,7 @@ BuildCommandsPage() {
 
     Main.SetFont("s9 bold c" Theme["text"], "Arial")
     AddPageCtrl("Commands", Main.AddText("x290 y278 w420 h20 BackgroundTrans", "Команда"))
-    AddPageCtrl("Commands", Main.AddText("x725 y278 w120 h20 Center BackgroundTrans", "Кнопка"))
+    AddPageCtrl("Commands", Main.AddText("x725 y278 w120 h20 Center BackgroundTrans", "Клавіша"))
 
     yStart := 305
     Loop 12 {
@@ -1021,7 +1273,6 @@ BuildCommandsPage() {
         CommandEditCtrls.Push(AddPageCtrl("Commands", edit))
         CommandKeyCtrls.Push(AddPageCtrl("Commands", hot1))
         CommandKey2Ctrls.Push("")
-        AddTextButton("Commands", 870, y - 1, 200, 23, "ВИКОНАТИ", RunCommandButton.Bind(i))
     }
 
     Main.SetFont("s8 c" Theme["muted"], "Arial")
@@ -1117,15 +1368,16 @@ BuildMonitoringPage() {
     AddPageCtrl("Monitoring", Main.AddText("x290 y240 w760 h38 BackgroundTrans", "Для F2/F3 потрібен шлях до папки UKRAINE GTA у налаштуваннях."))
 
     AddIconPicture(Main, 292, 300, 22, 22, "forms", "Monitoring")
-    AddCheck("Monitoring", "Прийняття адм. форм на F2", 322, 300, (*) => ToggleFeature("F2"))
+    MonitorCheckCtrls["F2"] := AddCheck("Monitoring", "Прийняття адм. форм на F2", 322, 300, (*) => ToggleFeature("F2"))
     AddIconPicture(Main, 292, 335, 22, 22, "pm", "Monitoring")
-    AddCheck("Monitoring", "AutoID PM на F3 / F4", 322, 335, (*) => ToggleFeature("F3"))
+    MonitorCheckCtrls["F3"] := AddCheck("Monitoring", "AutoID PM на F3 / F4", 322, 335, (*) => ToggleFeature("F3"))
     AddIconPicture(Main, 292, 370, 22, 22, "report_new", "Monitoring")
-    AddCheck("Monitoring", "Слідкування за репортами", 322, 370, (*) => ToggleFeature("ReportFollow"))
+    MonitorCheckCtrls["ReportFollow"] := AddCheck("Monitoring", "Слідкування за репортами", 322, 370, (*) => ToggleFeature("ReportFollow"))
     AddIconPicture(Main, 292, 405, 22, 22, "vip", "Monitoring")
-    AddCheck("Monitoring", "Чати", 322, 405, (*) => ToggleFeature("AdminChat"))
+    MonitorCheckCtrls["AdminChat"] := AddCheck("Monitoring", "ЧАТИ", 322, 405, (*) => ToggleFeature("AdminChat"))
+    AddPageCtrl("Monitoring", Main.AddText("x430 y407 w360 h20 BackgroundTrans", "відкриття через /menu"))
     AddIconPicture(Main, 292, 440, 22, 22, "bind", "Monitoring")
-    AddCheck("Monitoring", "Підказки біндів", 322, 440, (*) => ToggleFeature("BindHints"))
+    MonitorCheckCtrls["BindHints"] := AddCheck("Monitoring", "Підказки біндів", 322, 440, (*) => ToggleFeature("BindHints"))
 
     AddTextButton("Monitoring", 720, 300, 260, 34, "АДМ. КОМАНДИ", (*) => ToggleAdminCommandsHelp())
 }
@@ -1177,14 +1429,35 @@ WM_MOUSEMOVE_ATOOLS(wParam, lParam, msg, hwnd) {
 }
 
 FadeInMainWindow() {
-    ; Без прозорості всього вікна: текст, кнопки та чекбокси завжди лишаються чіткими.
-    return
+    ApplyWindowTransparency()
 }
 
 ApplyWindowTransparency() {
-    ; Не робимо WinSetTransparent на все вікно, бо тоді тьмяніє текст.
-    ; Прозорість імітується кольором фон-плашок: текст/кнопки лишаються чіткими.
-    return
+    global Main, WindowTransparency, Theme
+    if !IsObject(Main)
+        return
+
+    ; Легка прозорість як на скріні: без TransColor, щоб не було проклікування наскрізь.
+    ; Значення обмежене 220-255, щоб текст і кнопки лишались читабельними.
+    value := Max(235, Min(255, Integer(WindowTransparency)))
+    try Main.BackColor := Theme["bg"]
+    try WinSetTransColor("Off", "ahk_id " Main.Hwnd)
+    try WinSetTransparent(value, "ahk_id " Main.Hwnd)
+}
+
+ApplyTransparencyToGui(guiObj, value) {
+    if !IsObject(guiObj)
+        return
+    value := Max(235, Min(255, Integer(value)))
+    try WinSetTransColor("Off", "ahk_id " guiObj.Hwnd)
+    try WinSetTransparent(value, "ahk_id " guiObj.Hwnd)
+}
+
+OverlayWindowOptions(baseOptions := "-Caption +AlwaysOnTop +ToolWindow") {
+    ; WS_EX_NOACTIVATE: вікно показується поверх гри, але не забирає фокус і не згортає MTA у вікні/безрамці.
+    if !InStr(baseOptions, "+E0x08000000")
+        baseOptions .= " +E0x08000000"
+    return baseOptions
 }
 
 UseSoftPanels() {
@@ -1193,31 +1466,39 @@ UseSoftPanels() {
 }
 
 PanelColor() {
-    global WindowTransparency, Theme
-    t := Max(150, Min(255, Integer(WindowTransparency)))
-    if (t >= 250)
-        return Theme["panel"]
-    ratio := (255 - t) / 105.0
-    return MixHex(Theme["panel"], "242424", ratio)
+    global Theme, WindowTransparency
+    ; При прозорості нижче 255 темні панелі стають прозорим кольором.
+    ; Текст, кнопки, поля вводу й фіолетові акценти лишаються нормальними.
+    if (Integer(WindowTransparency) < 255)
+        return "010101"
+    return Theme["panel"]
 }
 
 PanelBgOpt() {
     return "Background" PanelColor()
 }
 
-SaveWindowTransparency(*) {
-    global Controls, WindowTransparency, iniPath
-    try WindowTransparency := Controls["TransparencySlider"].Value
-    WindowTransparency := Max(150, Min(255, Integer(WindowTransparency)))
-    IniWrite(WindowTransparency, iniPath, "Theme", "WindowTransparency")
-    ShowAtoolsNotice("Прозорість фону/плашок збережено. Перезапускаю ATools.")
+SaveUiBuildMode(*) {
+    global Controls, UiBuildMode, iniPath
+    UiBuildMode := (Controls.Has("UiVersionDDL") && Controls["UiVersionDDL"].Value = 2) ? "unstable" : "stable"
+    IniWrite(UiBuildMode, iniPath, "UI", "BuildMode")
+    ShowAtoolsNotice("Версію UI збережено. Перезапускаю ATools.")
     Sleep(420)
     Reload()
 }
 
+SaveWindowTransparency(*) {
+    global Controls, WindowTransparency, iniPath
+    try WindowTransparency := Controls["TransparencySlider"].Value
+    WindowTransparency := Max(235, Min(255, Integer(WindowTransparency)))
+    IniWrite(WindowTransparency, iniPath, "Theme", "WindowTransparency")
+    ApplyWindowTransparency()
+    ShowAtoolsNotice("Прозорість застосовано.")
+}
+
 
 BuildSettingsPage() {
-    global Main, Theme, Name, nRank, Ranks, Controls, RadialExtraCommands, RadialExtraCtrls, RadialCommands, RadialCtrls, AppointmentDate, EnableRadialMenu, ThemeEditCtrls, BaseThemeColor, WindowTransparency
+    global Main, Theme, Name, nRank, Ranks, Controls, RadialExtraCommands, RadialExtraCtrls, RadialCommands, RadialCtrls, AppointmentDate, EnableRadialMenu, ThemeEditCtrls, BaseThemeColor, WindowTransparency, UiBuildMode
     InitRadialCommands()
 
     AddHero("Settings", 265, 98, 850, 60, "Налаштування", "Профіль, шлях до гри, radial-меню та оформлення інтерфейсу")
@@ -1279,9 +1560,16 @@ BuildSettingsPage() {
     ThemeEditCtrls["base"] := AddPageCtrl("Settings", Main.AddEdit("x455 y610 w105 h25 Background" Theme["field"] " c" Theme["text"], BaseThemeColor))
     AddTextButton("Settings", 575, 607, 150, 30, "ЗАСТОСУВАТИ", (*) => SaveThemeSettings())
     AddTextButton("Settings", 745, 607, 170, 30, "ФОН ТУЛСУ", (*) => SelectBackgroundFile())
-    AddPageCtrl("Settings", Main.AddText("x930 y548 w170 h20 BackgroundTrans", "Прозорість фону:"))
-    Controls["TransparencySlider"] := AddPageCtrl("Settings", Main.AddSlider("x930 y575 w155 h28 Range150-255 ToolTip", WindowTransparency))
+
+    AddPageCtrl("Settings", Main.AddText("x745 y642 w110 h20 BackgroundTrans", "Версія UI:"))
+    Controls["UiVersionDDL"] := AddPageCtrl("Settings", Main.AddDropDownList("x850 y638 w170 Background" Theme["field"] " c" Theme["text"], ["stable 1.0.2", "unstable 1.0.2"]))
+    Controls["UiVersionDDL"].Choose(StrLower(UiBuildMode) = "unstable" ? 2 : 1)
+    Controls["UiVersionDDL"].OnEvent("Change", SaveUiBuildMode)
+
+    AddPageCtrl("Settings", Main.AddText("x930 y548 w170 h20 BackgroundTrans", "Прозорість інтерфейсу:"))
+    Controls["TransparencySlider"] := AddPageCtrl("Settings", Main.AddSlider("x930 y575 w155 h28 Range235-255 ToolTip", WindowTransparency))
     Controls["TransparencySlider"].OnEvent("Change", SaveWindowTransparency)
+    AddTextButton("Settings", 930, 607, 155, 30, "ШЛЯХ", (*) => OpenInstallPath())
 
     AddTextButton("Settings", 290, 390, 145, 28, "ЗБЕРЕГТИ", (*) => SaveProfile())
     AddTextButton("Settings", 445, 390, 145, 28, "ПАПКА UGTA", (*) => SelectUGTAFolder())
@@ -1320,7 +1608,7 @@ ShowAtoolsNotice(text, timeout := 1100) {
 ; =========================================================
 
 ReadSettings() {
-    global iniPath, Name, Rank, nRank, AppointmentDate, Commands, CommandKeys, CommandKeys2, Reports, ReportKeys, ReportVisibleCount, ReportMaxCount, RadialExtraCommands, RadialCommands, Ranks, EnableRadialMenu, Theme, BaseThemeColor, ReportPanelPosX, ReportPanelPosY, CustomBgPath, F2PosX, F2PosY, BindHintsPosX, BindHintsPosY, WindowTransparency
+    global iniPath, Name, Rank, nRank, AppointmentDate, Commands, CommandKeys, CommandKeys2, Reports, ReportKeys, ReportVisibleCount, ReportMaxCount, RadialExtraCommands, RadialCommands, Ranks, EnableRadialMenu, Theme, BaseThemeColor, ReportPanelPosX, ReportPanelPosY, CustomBgPath, F2PosX, F2PosY, BindHintsPosX, BindHintsPosY, WindowTransparency, WindowResizeEnabled, UiBuildMode
     if !FileExist(iniPath)
         return
 
@@ -1359,6 +1647,10 @@ ReadSettings() {
     ReportPanelPosY := Integer(IniRead(iniPath, "ReportPanel", "Y", ReportPanelPosY))
     CustomBgPath := IniRead(iniPath, "Theme", "Background", CustomBgPath)
     WindowTransparency := Integer(IniRead(iniPath, "Theme", "WindowTransparency", WindowTransparency))
+    WindowResizeEnabled := false
+    UiBuildMode := StrLower(IniRead(iniPath, "UI", "BuildMode", "stable"))
+    if (UiBuildMode != "unstable")
+        UiBuildMode := "stable"
     F2PosX := Integer(IniRead(iniPath, "F2Panel", "X", F2PosX))
     F2PosY := Integer(IniRead(iniPath, "F2Panel", "Y", F2PosY))
     BindHintsPosX := Integer(IniRead(iniPath, "BindHints", "X", BindHintsPosX))
@@ -1534,10 +1826,22 @@ ShadeHex(hex, percent) {
     return Format("{:02X}{:02X}{:02X}", Max(0, Min(255, r)), Max(0, Min(255, g)), Max(0, Min(255, b)))
 }
 
+SaveWindowResizeSetting(*) {
+    global Controls, WindowResizeEnabled, iniPath
+    WindowResizeEnabled := Controls.Has("WindowResizeCB") ? (Controls["WindowResizeCB"].Value = 1) : WindowResizeEnabled
+    IniWrite(WindowResizeEnabled ? 1 : 0, iniPath, "UI", "WindowResizeEnabled")
+    ShowAtoolsNotice(WindowResizeEnabled ? "Зміну розміру увімкнено. Перезапусти тулс." : "Зміну розміру вимкнено. Перезапусти тулс.")
+}
+
+OpenInstallPath(*) {
+    try Run(A_ScriptDir)
+}
+
+!o::OpenInstallPath()
 
 SelectBackgroundFile() {
     global iniPath, CustomBgPath
-    selected := FileSelect(1, A_ScriptDir, "Вибери фон ATools", "Images (*.png; *.jpg; *.jpeg; *.webp)")
+    selected := FileSelect(1, A_ScriptDir, "Вибери фон ATools", "Images (*.png; *.jpg; *.jpeg; *.webp; *.gif)")
     if (selected = "")
         return
     CustomBgPath := selected
@@ -1842,14 +2146,21 @@ SendCommandText(cmd) {
 
 SendCommandTextEx(cmd, autoEnter := false) {
     cmd := RegExReplace(cmd, "^/+")
-    SendInput("{sc014}")
-    Sleep(100)
-    Send("^a")
+    hWnd := FindGameWindow()
+    if hWnd {
+        WinActivate("ahk_id " hWnd)
+        WinWaitActive("ahk_id " hWnd, , 1)
+        Sleep(80)
+    }
+    ReleaseHotkeyModifiers()
+    SendEvent("{sc014}")
     Sleep(100)
     if autoEnter
-        SendInput("/" cmd "{Enter}")
+        SendText("/" cmd)
     else
-        SendInput("/" cmd " ")
+        SendText("/" cmd " ")
+    if autoEnter
+        SendEvent("{Enter}")
 }
 
 StartPunishmentQueue() {
@@ -1874,7 +2185,7 @@ StartPunishmentQueue() {
 
     ; Важливо для MTA: без WinActivate і без звичайного Center-вікна.
     ; Overlay показується NoActivate + click-through, тому не альтабає з гри.
-    PunishmentQueueGui := Gui("-Caption +AlwaysOnTop +ToolWindow +E0x20", "Відправка покарань")
+    PunishmentQueueGui := Gui(OverlayWindowOptions("-Caption +AlwaysOnTop +ToolWindow +E0x20"), "Відправка покарань")
     PunishmentQueueGui.BackColor := Theme["panel"]
     PunishmentQueueGui.SetFont("s9 c" Theme["text"], "Arial")
     PunishmentQueueGui.AddText("x12 y8 w420 h20 BackgroundTrans", "Відправка покарань у гру")
@@ -2091,23 +2402,106 @@ HandleCapsLockUp() {
 ; =========================================================
 
 ToggleFeature(name) {
-    global EnableF2, EnableF3, EnableExtraCommands, EnableReportFollow, EnableAdminChatMonitor, EnableBindHints
+    global EnableF2, EnableF3, EnableReportFollow, EnableBindHints, EnableAdminChatMonitor
     switch name {
         case "F2":
-            EnableF2 := !EnableF2
-            ToggleLastFormWindow(EnableF2)
+            SetFeature("F2", !EnableF2)
         case "F3":
-            EnableF3 := !EnableF3
-            ToggleAutoPmReportPanel(EnableF3)
+            SetFeature("F3", !EnableF3)
         case "ReportFollow":
-            EnableReportFollow := !EnableReportFollow
-            ToggleReportFollow(EnableReportFollow)
+            SetFeature("ReportFollow", !EnableReportFollow)
         case "AdminChat":
-            EnableAdminChatMonitor := !EnableAdminChatMonitor
-            ToggleAdminChatWindow(EnableAdminChatMonitor)
+            SetFeature("AdminChat", !EnableAdminChatMonitor)
         case "BindHints":
-            EnableBindHints := !EnableBindHints
-            ToggleBindHints(EnableBindHints)
+            SetFeature("BindHints", !EnableBindHints)
+    }
+}
+
+SetFeature(name, enable) {
+    global EnableF2, EnableF3, EnableReportFollow, EnableBindHints, EnableAdminChatMonitor
+    enable := enable ? true : false
+    switch name {
+        case "F2":
+            EnableF2 := enable
+            ToggleLastFormWindow(enable)
+        case "F3":
+            EnableF3 := enable
+            ToggleAutoPmReportPanel(enable)
+        case "ReportFollow":
+            EnableReportFollow := enable
+            ToggleReportFollow(enable)
+        case "AdminChat":
+            EnableAdminChatMonitor := enable
+            if !enable
+                ToggleAdminChatWindow(false)
+            else
+                ShowAtoolsNotice("ЧАТИ увімкнено. Введи /menu і натисни Enter — вікно відкриється або закриється.")
+        case "BindHints":
+            EnableBindHints := enable
+            ToggleBindHints(enable)
+    }
+    SetMonitorCheck(name, enable)
+}
+
+SetMonitorCheck(name, enable) {
+    global MonitorCheckCtrls
+    try {
+        if IsObject(MonitorCheckCtrls) && MonitorCheckCtrls.Has(name)
+            MonitorCheckCtrls[name].Value := enable ? 1 : 0
+    }
+}
+
+OpenChatsMenu(*) {
+    ; /menu — hotstring тулсу, не команда MTA.
+    ; Повторний запуск закриває вікно чатів, але галочку "ЧАТИ" не вимикає.
+    global AdminChatGui
+    if IsGuiAlive(AdminChatGui) {
+        SetTimer(UpdateAdminChatWindow, 0)
+        try AdminChatGui.Destroy()
+        AdminChatGui := ""
+    } else {
+        ToggleAdminChatWindow(true)
+    }
+}
+
+TrackMenuHotChars(ch) {
+    global MenuHotSeq, MenuHotLastTick
+    now := A_TickCount
+    if (now - MenuHotLastTick > 2200)
+        MenuHotSeq := ""
+    MenuHotLastTick := now
+    MenuHotSeq .= StrLower(ch)
+    if (StrLen(MenuHotSeq) > 5)
+        MenuHotSeq := SubStr(MenuHotSeq, -4)
+    ; Не відкриваємо одразу після /menu. Чекаємо Enter, щоб не заважало набору тексту.
+}
+
+SubmitMenuHotChars(*) {
+    global MenuHotSeq, MenuHotToggleTick
+    if (MenuHotSeq = "/menu") {
+        MenuHotSeq := ""
+        if (A_TickCount - MenuHotToggleTick < 350)
+            return
+        MenuHotToggleTick := A_TickCount
+        SetTimer(OpenChatsMenu, -10)
+        return
+    }
+    MenuHotSeq := ""
+}
+
+ResetMenuHotChars(*) {
+    global MenuHotSeq
+    MenuHotSeq := ""
+}
+
+IsGuiAlive(guiObj) {
+    if !IsObject(guiObj)
+        return false
+    try {
+        hwnd := guiObj.Hwnd
+        return WinExist("ahk_id " hwnd) ? true : false
+    } catch {
+        return false
     }
 }
 
@@ -2640,6 +3034,32 @@ ReportPanelF1Action() {
     DeclineLastAdminForm()
 }
 
+F2Resize(guiObj, minMax, width, height) {
+    global F2ListView
+    if (minMax = -1)
+        return
+    try F2ListView.Move(8, 48, Max(180, width - 16), Max(40, height - 56))
+}
+
+ReportPanelResize(guiObj, minMax, width, height) {
+    global ReportPanelAccentBar, ReportPanelTitleText, ReportPanelCloseText, ReportPanelPlayerText, ReportPanelStatusText, ReportPanelTimerText, ReportPanelHintText
+    if (minMax = -1)
+        return
+    try ReportPanelAccentBar.Move(0, 0, width, 4)
+    try ReportPanelTitleText.Move(10, 7, Max(80, width - 95), 18)
+    try ReportPanelCloseText.Move(width - 28, 6, 20, 18)
+    try ReportPanelPlayerText.Move(12, 32, Max(120, width - 95), 23)
+    try ReportPanelTimerText.Move(width - 75, 31, 60, 26)
+    try ReportPanelStatusText.Move(12, 58, Max(140, width - 24), Max(22, height - 87))
+    try ReportPanelHintText.Move(12, height - 24, Max(140, width - 24), 17)
+}
+
+AdminChatResize(guiObj, minMax, width, height) {
+    if (minMax = -1)
+        return
+    try guiObj["ChatsText"].Move(10, 64, Max(200, width - 20), Max(80, height - 74))
+}
+
 F2StartDrag(*) {
     global F2Gui
     if !IsObject(F2Gui)
@@ -2663,7 +3083,7 @@ F2SavePosition() {
 ToggleLastFormWindow(enable) {
     global F2Gui, F2ListView, Theme, F2PosX, F2PosY
     if enable {
-        F2Gui := Gui("-Caption +AlwaysOnTop +ToolWindow", "ATools | Forms")
+        F2Gui := Gui(OverlayWindowOptions("-Caption +AlwaysOnTop +ToolWindow"), "ATools | Forms")
         F2Gui.BackColor := Theme["panel"]
         F2Gui.SetFont("s8 c" Theme["text"], "Arial")
         titleBar := F2Gui.AddText("x0 y0 w420 h20 Background" Theme["line"], "")
@@ -2671,7 +3091,7 @@ ToggleLastFormWindow(enable) {
         titleText := F2Gui.AddText("x8 y3 w330 h16 BackgroundTrans", "ATools | F2 форми")
         titleText.OnEvent("Click", F2StartDrag)
         close := F2Gui.AddText("x395 y2 w18 h16 Center +0x100 Background" Theme["line"], "×")
-        close.OnEvent("Click", (*) => ToggleFeature("F2"))
+        close.OnEvent("Click", (*) => SetFeature("F2", false))
         F2Gui.AddText("x8 y26 w400 h16 BackgroundTrans", "F2 — прийняти | F1 — закрити | росте під нові форми")
         F2ListView := F2Gui.AddListView("x8 y48 w404 h44 Background" Theme["field"] " c" Theme["text"] " Grid -Multi -Hdr", ["Форма", "Нікнейм", "ID", "Залишилось"])
         F2ListView.ModifyCol(1, 135)
@@ -2680,11 +3100,14 @@ ToggleLastFormWindow(enable) {
         F2ListView.ModifyCol(4, 66)
         F2Gui.Show("x" F2PosX " y" F2PosY " w420 h100 NoActivate")
         ForceTopMost(F2Gui)
+        ApplyWindowTransparency()
+        F2Gui.OnEvent("Size", F2Resize)
         SetTimer(UpdateLastFormWindow, 300)
         UpdateLastFormWindow()
     } else {
         SetTimer(UpdateLastFormWindow, 0)
         try F2Gui.Destroy()
+        F2Gui := ""
         F2ListView := ""
     }
 }
@@ -2794,7 +3217,7 @@ ShowReportFollowAlert(count) {
         if IsObject(ReportFollowNotifyGui)
             ReportFollowNotifyGui.Destroy()
     }
-    ReportFollowNotifyGui := Gui("-Caption +AlwaysOnTop +ToolWindow", "ATools Report Alert")
+    ReportFollowNotifyGui := Gui(OverlayWindowOptions("-Caption +AlwaysOnTop +ToolWindow"), "ATools Report Alert")
     ReportFollowNotifyGui.BackColor := Theme["panel"]
     ReportFollowNotifyGui.SetFont("s12 bold c" Theme["text"], "Arial")
     ReportFollowNotifyGui.AddText("x0 y0 w520 h4 Background" Theme["danger"], "")
@@ -2823,7 +3246,7 @@ ReportPanelCreate() {
             ReportPanelGui.Destroy()
     }
 
-    ReportPanelGui := Gui("-Caption +AlwaysOnTop +ToolWindow", "ATools Report Panel")
+    ReportPanelGui := Gui(OverlayWindowOptions("-Caption +AlwaysOnTop +ToolWindow"), "ATools Report Panel")
     ReportPanelGui.BackColor := Theme["panel"]
 
     ReportPanelAccentBar := ReportPanelGui.AddText("x0 y0 w" ReportPanelW " h4 Background" Theme["accent"], "")
@@ -2835,7 +3258,7 @@ ReportPanelCreate() {
 
     ReportPanelGui.SetFont("s9 bold c" Theme["muted"], "Arial")
     ReportPanelCloseText := ReportPanelGui.AddText("x313 y6 w20 h18 Center BackgroundTrans", "×")
-    ReportPanelCloseText.OnEvent("Click", (*) => ToggleFeature("F3"))
+    ReportPanelCloseText.OnEvent("Click", (*) => SetFeature("F3", false))
 
     ReportPanelGui.SetFont("s13 bold c" Theme["text"], "Arial")
     ReportPanelPlayerText := ReportPanelGui.AddText("x12 y32 w245 h23 BackgroundTrans", "✦ Репортів немає")
@@ -2857,6 +3280,8 @@ ReportPanelCreate() {
 
     ReportPanelGui.Show("x" ReportPanelPosX " y" ReportPanelPosY " w" ReportPanelW " h" ReportPanelH " NoActivate")
     ForceTopMost(ReportPanelGui)
+    ApplyWindowTransparency()
+    ReportPanelGui.OnEvent("Size", ReportPanelResize)
     ReportPanelUpdate()
 }
 
@@ -3144,12 +3569,16 @@ SendReportWindowText() {
 }
 
 ToggleAdminChatWindow(enable) {
-    global AdminChatGui, Theme, ChatsActiveTab, ChatsLastText
+    global AdminChatGui, Theme, ChatsActiveTab, ChatsLastText, WindowTransparency
     if enable {
-        AdminChatGui := Gui("+AlwaysOnTop +ToolWindow", "Чати")
+        if IsGuiAlive(AdminChatGui) {
+            ForceTopMost(AdminChatGui)
+            return
+        }
+        AdminChatGui := Gui(OverlayWindowOptions("+AlwaysOnTop +ToolWindow"), "Чати")
         AdminChatGui.BackColor := Theme["panel"]
-        AdminChatGui.SetFont("s8 c" Theme["text"], "Arial")
-        AdminChatGui.OnEvent("Close", (*) => ToggleFeature("AdminChat"))
+        AdminChatGui.SetFont("s9 bold c" Theme["text"], "Segoe UI")
+        AdminChatGui.OnEvent("Close", (*) => SetFeature("AdminChat", false))
         AdminChatGui.AddText("x10 y8 w760 h20", "Чати: кілл-ліст, VIP, адмін-чат, репорти, фракційне, адмін-команди")
         tabs := ["Кілл-ліст", "Віп-чат", "Адмін-чат", "Репорти", "Фракційне", "Адмін команди"]
         x := 10
@@ -3163,11 +3592,14 @@ ToggleAdminChatWindow(enable) {
         ChatsLastText := ""
         AdminChatGui.Show("x20 y260 w860 h325 NoActivate")
         ForceTopMost(AdminChatGui)
+        ApplyTransparencyToGui(AdminChatGui, WindowTransparency)
+        AdminChatGui.OnEvent("Size", AdminChatResize)
         UpdateAdminChatWindow(true)
         SetTimer(UpdateAdminChatWindow, 1000)
     } else {
         SetTimer(UpdateAdminChatWindow, 0)
         try AdminChatGui.Destroy()
+        AdminChatGui := ""
     }
 }
 
@@ -3286,12 +3718,51 @@ ForceTopMost(guiObj) {
     }
 }
 
+FindGameWindow() {
+    for title in ["UKRAINE GTA", "MTA: San Andreas", "Multi Theft Auto"] {
+        hWnd := WinExist(title)
+        if hWnd
+            return hWnd
+    }
+    for exeName in ["gta_sa.exe", "Multi Theft Auto.exe", "proxy_sa.exe"] {
+        hWnd := WinExist("ahk_exe " exeName)
+        if hWnd
+            return hWnd
+    }
+    return 0
+}
+
+SendChatCommandToGame(text) {
+    if (Trim(text) = "")
+        return
+    hWnd := FindGameWindow()
+    if !hWnd {
+        MsgBox("Вікно MTA / UKRAINE GTA не знайдено.", "ATools NextGen | 02", "Icon!")
+        return
+    }
+
+    try BlockInput(true)
+    try {
+        WinActivate("ahk_id " hWnd)
+        WinWaitActive("ahk_id " hWnd, , 1)
+        Sleep(120)
+        ReleaseHotkeyModifiers()
+        SendEvent("{sc014}") ; T — відкрити чат MTA
+        Sleep(130)
+        SendText(text)
+        Sleep(60)
+        SendEvent("{Enter}")
+    } finally {
+        try BlockInput(false)
+    }
+}
+
 SendTextToGameConsole(text) {
     if (Trim(text) = "")
         return
-    hWnd := WinExist("UKRAINE GTA")
+    hWnd := FindGameWindow()
     if !hWnd {
-        MsgBox("Вікно UKRAINE GTA не знайдено.", "ATools NextGen | 02", "Icon!")
+        MsgBox("Вікно MTA / UKRAINE GTA не знайдено.", "ATools NextGen | 02", "Icon!")
         return
     }
     cmd := text
@@ -3327,13 +3798,15 @@ ToggleOverlayClickThrough() {
 ToggleBindHints(enable) {
     global BindHintsGui, Theme, Reports, ReportKeys, ReportKeyCtrls, BindHintsPosX, BindHintsPosY
     if enable {
-        BindHintsGui := Gui("-Caption +AlwaysOnTop +ToolWindow", "Підказки біндів")
+        BindHintsGui := Gui(OverlayWindowOptions("-Caption +AlwaysOnTop +ToolWindow"), "Підказки біндів")
         BindHintsGui.BackColor := Theme["panel"]
         BindHintsGui.SetFont("s7 c" Theme["text"], "Arial")
         bar := BindHintsGui.AddText("x0 y0 w460 h20 Background" Theme["line"], "")
         bar.OnEvent("Click", BindHintsStartDrag)
         title := BindHintsGui.AddText("x8 y3 w400 h15 BackgroundTrans", "ATools | Підказки біндів")
         title.OnEvent("Click", BindHintsStartDrag)
+        close := BindHintsGui.AddText("x435 y2 w18 h16 Center +0x100 Background" Theme["line"], "×")
+        close.OnEvent("Click", (*) => SetFeature("BindHints", false))
         y := 28
         Loop 10 {
             i := A_Index
@@ -3352,6 +3825,7 @@ ToggleBindHints(enable) {
         }
         BindHintsGui.Show("x" BindHintsPosX " y" BindHintsPosY " w460 h215 NoActivate")
         ForceTopMost(BindHintsGui)
+        ApplyWindowTransparency()
     } else {
         try BindHintsGui.Destroy()
     }
@@ -3520,7 +3994,7 @@ ToggleAdminCommandsHelp() {
 
 ChooseCustomBackground() {
     global iniPath, CustomBgPath
-    try selected := FileSelect(1, A_ScriptDir, "Вибери фон для ATools", "Images (*.png; *.jpg; *.jpeg; *.bmp)")
+    try selected := FileSelect(1, A_ScriptDir, "Вибери фон для ATools", "Images (*.png; *.jpg; *.jpeg; *.webp; *.bmp; *.gif)")
     catch
         selected := ""
     if (selected = "")
