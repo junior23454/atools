@@ -4,12 +4,6 @@
 #MaxThreadsPerHotkey 1
 Persistent
 
-; Максимально швидка і стабільна відправка клавіш у MTA.
-SendMode("Input")
-SetKeyDelay(-1, -1)
-SetWinDelay(-1)
-SetControlDelay(-1)
-SetMouseDelay(-1)
 InstallKeybdHook()
 EnsureSingleInstance()
 EnsureAdmin()
@@ -20,7 +14,7 @@ EnsureAdmin()
 ; Focus: reports, punishments, monitoring, settings
 ; =========================================================
 
-appVersion := "1.0.4"
+appVersion := "1.0.2"
 appTitle := "ATools NextGen | 02"
 githubRepo := "junior23454/atools"
 githubBranch := "main"
@@ -101,7 +95,7 @@ CustomBgPath := ""
 BgAxHwnd := 0
 WindowTransparency := 245
 WindowResizeEnabled := false
-UiBuildMode := "stable" ; stable 1.0.3 = без градієнта, unstable 1.0.3 = з градієнтом
+UiBuildMode := "stable" ; stable 1.0.2 = без градієнта, unstable 1.0.2 = з градієнтом
 MonitorCheckCtrls := Map()
 ChatsActiveTab := "Віп-чат"
 ChatsLastText := ""
@@ -110,7 +104,7 @@ F2PosY := 20
 BindHintsPosX := 20
 BindHintsPosY := 360
 RadialCommands := []
-RadialCtrls := []
+InitRadialCommands()
 
 PlayUiClickSound() {
     PlayAtoolsSound("click")
@@ -146,24 +140,9 @@ WithClickSound(callback) {
 }
 
 IconPath(name) {
-    ; AHK не екранує backslash, тому потрібен реальний \ перед назвою файлу.
-    png := A_ScriptDir "\assets\icons\" name ".png"
-    ico := A_ScriptDir "\assets\icons\" name ".ico"
+    png := A_ScriptDir "\\assets\\icons\\" name ".png"
+    ico := A_ScriptDir "\\assets\\icons\\" name ".ico"
     return FileExist(png) ? png : ico
-}
-
-IconGlyph(name) {
-    static glyphs := ""
-    if !IsObject(glyphs) {
-        glyphs := Map(
-            "home", "⌂", "reports", "✉", "report_new", "✉", "punishments", "⚖",
-            "hotkey", "⌨", "commands", "⌘", "monitoring", "◉", "radial", "◎",
-            "settings", "⚙", "profile", "👤", "palette", "◆", "forms", "▣",
-            "pm", "PM", "vip", "VIP", "bind", "⌁", "ugta_mark", "UG", "server02_logo", "02"
-        )
-    }
-    key := StrLower(String(name))
-    return glyphs.Has(key) ? glyphs[key] : "•"
 }
 
 SafeAddPicture(guiObj, opts, path) {
@@ -177,40 +156,22 @@ SafeAddPicture(guiObj, opts, path) {
 }
 
 AddIconPicture(guiObj, x, y, w, h, name, page := "") {
-    global Theme
     path := IconPath(name)
-    if FileExist(path) {
-        try {
-            ctrl := guiObj.AddPicture("x" x " y" y " w" w " h" h " BackgroundTrans", path)
-            if (page != "")
-                AddPageCtrl(page, ctrl)
-            return ctrl
-        }
-    }
-
-    ; Красивий fallback без зовнішніх файлів: якщо PNG/ICO немає, показуємо компактну badge-іконку.
+    if !FileExist(path)
+        return ""
     try {
-        size := Max(w, h)
-        bg := guiObj.AddText("x" x " y" y " w" w " h" h " Center +0x200 Background" Theme["accent2"], IconGlyph(name))
-        fontSize := size <= 18 ? 8 : (size <= 22 ? 9 : 12)
-        bg.SetFont("s" fontSize " bold c" Theme["text"], "Segoe UI Symbol")
+        ctrl := guiObj.AddPicture("x" x " y" y " w" w " h" h " BackgroundTrans", path)
         if (page != "")
-            AddPageCtrl(page, bg)
-        return bg
+            AddPageCtrl(page, ctrl)
+        return ctrl
     }
     return ""
 }
 
 EnsureUGTAOfficialAssets() {
-    ; Не блокуємо запуск тулсу інтернет-завантаженням.
-    ; Якщо офіційних фонів/лого немає, докачуємо їх у фоні вже після старту GUI.
+    global UGTA_BG_URL, UGTA_LOGO_URL
     try DirCreate(A_ScriptDir "\assets\bg")
     try DirCreate(A_ScriptDir "\assets\icons")
-    SetTimer(EnsureUGTAOfficialAssetsAsync, -800)
-}
-
-EnsureUGTAOfficialAssetsAsync(*) {
-    global UGTA_BG_URL, UGTA_LOGO_URL
     bgFile := A_ScriptDir "\assets\bg\big-img.webp"
     logoFile := A_ScriptDir "\assets\icons\ugta_logo_official.png"
     if !FileExist(bgFile)
@@ -274,7 +235,7 @@ SendBackgroundToBottom() {
 }
 
 FileUrl(path) {
-    p := StrReplace(path, "", "/")
+    p := StrReplace(path, "\", "/")
     p := StrReplace(p, " ", "%20")
     p := StrReplace(p, "#", "%23")
     p := StrReplace(p, "'", "%27")
@@ -301,15 +262,7 @@ GetUGTABackgroundPath() {
 }
 
 GetUGTALogoPath() {
-    ; Підтримка нового широкого логотипа NextGen Tools.
-    custom1 := A_ScriptDir "\ugtools_nextgen_logo.png"
-    custom2 := A_ScriptDir "\assets\icons\ugtools_nextgen_logo.png"
-    if FileExist(custom1)
-        return custom1
-    if FileExist(custom2)
-        return custom2
-
-    ; Фолбек на старі логотипи.
+    ; Верхній логотип беремо саме з ugta_mark.png.
     mark := A_ScriptDir "\assets\icons\ugta_mark.png"
     if FileExist(mark)
         return mark
@@ -336,7 +289,7 @@ GetTintedLogoPath(sourcePath) {
     outDir := A_ScriptDir "\assets\icons"
     try DirCreate(outDir)
     SplitPath(sourcePath, , , , &nameNoExt)
-    outPath := outDir "" nameNoExt "_tinted_" hex ".png"
+    outPath := outDir "\" nameNoExt "_tinted_" hex ".png"
     if FileExist(outPath)
         return outPath
 
@@ -405,96 +358,16 @@ MenuHotSeq := ""
 MenuHotLastTick := 0
 MenuHotToggleTick := 0
 
-
-SystemF1Action(*) {
-    SystemHotkeyAction("F1")
-}
-
-SystemF2Action(*) {
-    SystemHotkeyAction("F2")
-}
-
-SystemF3Action(*) {
-    SystemHotkeyAction("F3")
-}
-
-SystemF4Action(*) {
-    SystemHotkeyAction("F4")
-}
-
-SystemHotkeyAction(name) {
-    if IsAtoolsHotkeyControlFocused()
-        return
-    static lastTick := Map()
-    now := A_TickCount
-    if (lastTick.Has(name) && now - lastTick[name] < 120)
-        return
-    lastTick[name] := now
-
-    switch name {
-        case "F1":
-            ReportPanelF1Action()
-        case "F2":
-            AcceptLastAdminForm()
-        case "F3":
-            AutoPmLastReport()
-        case "F4":
-            RepeatLastPmId()
-    }
-}
-
-RegisterSystemHotkeyAliases() {
-    ; Додаткові фізичні SC-хоткеї для MTA, якщо звичайні F1-F4 не ловляться.
-    ; Якщо користувач забіндив F1/F4 у репортах/командах/radial, системний дубль не перехоплює цю клавішу.
-    if !IsUserBareHotkeyAssigned("F1") {
-        try Hotkey("$SC03B", SystemF1Action, "On")
-        catch as err
-            LogAtoolsError("AN-001", "System", "RegisterHotkey", "SC03B/F1", err.Message)
-    }
-    try Hotkey("$SC03C", SystemF2Action, "On")
-    catch as err
-        LogAtoolsError("AN-001", "System", "RegisterHotkey", "SC03C/F2", err.Message)
-    try Hotkey("$SC03D", SystemF3Action, "On")
-    catch as err
-        LogAtoolsError("AN-001", "System", "RegisterHotkey", "SC03D/F3", err.Message)
-    if !IsUserBareHotkeyAssigned("F4") {
-        try Hotkey("$SC03E", SystemF4Action, "On")
-        catch as err
-            LogAtoolsError("AN-001", "System", "RegisterHotkey", "SC03E/F4", err.Message)
-    }
-}
-
-IsAdminChatMonitorEnabled() {
-    global EnableAdminChatMonitor
-    return IsSet(EnableAdminChatMonitor) && EnableAdminChatMonitor
-}
-
-IsRadialActive() {
-    global RadialActive
-    return IsSet(RadialActive) && RadialActive
-}
-
-IsCapsRadialHotkey() {
-    global RadialHotkey
-    if !IsSet(RadialHotkey)
-        return false
-    try {
-        return StrLower(NormalizeUserHotkey(RadialHotkey)) = "capslock"
-    } catch {
-        return false
-    }
-}
-
-#HotIf IsAdminChatMonitorEnabled()
+#HotIf EnableAdminChatMonitor
 ; Ловимо саме фізичні клавіші, а не Windows-hotstring.
 ; Так /menu працює у MTA, у рамці/безрамці/повноекранному вікні, але відкривається тільки після Enter.
-~SC035::TrackMenuHotChars("/")       ; / на основній клавіатурі, без Ctrl/Alt
-~vkBF::TrackMenuHotChars("/")        ; / залежно від розкладки, без Ctrl/Alt
-~NumpadDiv::TrackMenuHotChars("/")   ; / на NumPad, без Ctrl/Alt
-~SC032::TrackMenuHotChars("m")       ; M, без Ctrl/Alt
-~SC012::TrackMenuHotChars("e")       ; E, без Ctrl/Alt
-~SC031::TrackMenuHotChars("n")       ; N, без Ctrl/Alt
-~SC016::TrackMenuHotChars("u")       ; U, без Ctrl/Alt
+~*SC035::TrackMenuHotChars("/")      ; / на основній клавіатурі
+~*vkBF::TrackMenuHotChars("/")       ; / залежно від розкладки
+~*NumpadDiv::TrackMenuHotChars("/")  ; / на NumPad
+~*SC032::TrackMenuHotChars("m")      ; M
+~*SC012::TrackMenuHotChars("e")      ; E
+~*SC031::TrackMenuHotChars("n")      ; N
+~*SC016::TrackMenuHotChars("u")      ; U
 ~*Space::ResetMenuHotChars()
 ~*Enter::SubmitMenuHotChars()
 ~*Esc::ResetMenuHotChars()
@@ -525,23 +398,13 @@ RadialActive := false
 LastRadialWheel := 0
 RadialWheelDelay := 160
 EnableRadialMenu := true
-RadialHotkey := "CapsLock"
-RadialAutoOpenChat := false
-RadialSendEnter := false
-RadialEnabled := []
-RadialEnter := []
-RadialEnabledCtrls := []
-RadialEnterCtrls := []
-RegisteredRadialHotkeys := []
-LogDir := A_ScriptDir "\logs"
 RadialExtraCommands := ["", "", ""]
 RadialExtraCtrls := []
-InitRadialCommands()
 
 InitRadialCommands() {
-    global RadialCommands, RadialEnabled, RadialEnter
+    global RadialCommands
     defaults := ["resp", "sp", "pm", "jail", "mute", "kick", "ahouse", "", "", ""]
-    if !IsSet(RadialCommands) || !IsObject(RadialCommands)
+    if !IsObject(RadialCommands)
         RadialCommands := []
     while (RadialCommands.Length < 10) {
         nextIndex := RadialCommands.Length + 1
@@ -552,16 +415,6 @@ InitRadialCommands() {
             RadialCommands[A_Index] := defaults[A_Index]
     }
     RadialCommands[7] := "ahouse"
-
-    if !IsSet(RadialEnabled) || !IsObject(RadialEnabled)
-        RadialEnabled := []
-    while (RadialEnabled.Length < 10)
-        RadialEnabled.Push(true)
-
-    if !IsSet(RadialEnter) || !IsObject(RadialEnter)
-        RadialEnter := []
-    while (RadialEnter.Length < 10)
-        RadialEnter.Push(false)
 }
 
 SafeArrayGet(arr, index, default := "") {
@@ -579,14 +432,10 @@ Controls := Map()
 ThemeEditCtrls := Map()
 CommandEditCtrls := []
 CommandKeyCtrls := []
-CommandKey2Ctrls := []
-CommandVisibleCount := 12
-CommandMaxCount := 30
 ReportEditCtrls := []
 ReportKeyCtrls := []
 ReportVisibleCount := 26
 ReportMaxCount := 46
-HotkeyCaptureCtrls := Map()
 PunishmentBox := ""
 
 F2Gui := ""
@@ -602,34 +451,26 @@ DashboardSetupNoteCtrls := []
 ReadSettings()
 EnsureUGTAOfficialAssets()
 BuildTray()
-; ShowStartupLoader() вимкнено для швидшого входу в тулс.
+ShowStartupLoader()
 BuildGui()
 StartSoundMonitor()
 RegisterAllUserHotkeys()
-RegisterRadialHotkey()
-RegisterSystemHotkeyAliases()
 StartAutoUpdateChecks()
 
-#HotIf !IsUserBareHotkeyAssigned("F2")
-F2::SystemF2Action()
-#HotIf !IsUserBareHotkeyAssigned("F1")
-F1::SystemF1Action()
-#HotIf !IsUserBareHotkeyAssigned("F3")
-F3::SystemF3Action()
-#HotIf !IsUserBareHotkeyAssigned("F4")
-F4::SystemF4Action()
+F2::AcceptLastAdminForm()
+F1::ReportPanelF1Action()
+F3::AutoPmLastReport()
+F4::RepeatLastPmId()
 #HotIf WinActive("ahk_class AutoHotkeyGUI")
 !r::SendEvent("{Alt up}r{Alt down}")
 #HotIf
 $!r::StartPunishmentQueue()
 ^F9::ToggleOverlayClickThrough()
 ^F10::AdminActivityTracker.GenerateBonusReport()
-#HotIf IsCapsRadialHotkey()
 $CapsLock::HandleCapsLockDown()
 $CapsLock Up::HandleCapsLockUp()
-#HotIf
 
-#HotIf IsRadialActive()
+#HotIf RadialActive
 1::RadialSelect(1)
 2::RadialSelect(2)
 3::RadialSelect(3)
@@ -702,17 +543,17 @@ ShowStartupLoader() {
         target := step["p"]
         status.Text := step["t"]
         while (lastP < target) {
-            lastP += 10
+            lastP += 2
             if (lastP > target)
                 lastP := target
             barFill.Move(34, 170, Round(450 * lastP / 100), 10)
             percent.Text := lastP "%"
-            Sleep(2)
+            Sleep(16)
         }
-        Sleep(8)
+        Sleep(95)
     }
 
-    Sleep(20)
+    Sleep(120)
     try loader.Destroy()
 }
 
@@ -735,7 +576,7 @@ EnsureAdmin() {
 }
 
 QuoteArg(value) {
-    return '"' StrReplace(value, '"', '"') '"'
+    return '"' StrReplace(value, '"', '\"') '"'
 }
 
 ; =========================================================
@@ -984,22 +825,21 @@ BuildGui() {
 
     if FileExist(ugtaLogoPath) {
         tintedLogoPath := GetTintedLogoPath(ugtaLogoPath)
-        SafeAddPicture(Main, "x4 y8 w224 h92 BackgroundTrans", tintedLogoPath)
+        SafeAddPicture(Main, "x78 y10 w78 h78 BackgroundTrans", tintedLogoPath)
     } else {
         Main.SetFont("s16 bold c" Theme["text"], "Arial")
-        Main.AddText("x12 y28 w180 h26 BackgroundTrans", "ATools")
+        Main.AddText("x24 y20 w160 h26 BackgroundTrans", "ATools")
         Main.SetFont("s8 c" Theme["muted"], "Arial")
-        Main.AddText("x14 y56 w160 h18 BackgroundTrans", "NextGen | 02")
+        Main.AddText("x26 y50 w140 h18 BackgroundTrans", "NextGen | 02")
     }
-    ; top separator removed for cleaner sidebar
+    Main.AddText("x24 y88 w182 h1 Background" Theme["line"], "")
 
     AddNavButton("Головна", 24, 112, (*) => ShowPage("Dashboard"), "home", "Dashboard")
     AddNavButton("Репорти", 24, 157, (*) => ShowPage("Reports"), "reports", "Reports")
     AddNavButton("Покарання", 24, 202, (*) => ShowPage("Punishments"), "punishments", "Punishments")
     AddNavButton("Команди", 24, 247, (*) => ShowPage("Commands"), "hotkey", "Commands")
     AddNavButton("Моніторинг", 24, 292, (*) => ShowPage("Monitoring"), "monitoring", "Monitoring")
-    AddNavButton("Радіальне меню", 24, 337, (*) => ShowPage("Radial"), "radial", "Radial")
-    AddNavButton("Налаштування", 24, 382, (*) => ShowPage("Settings"), "settings", "Settings")
+    AddNavButton("Налаштування", 24, 337, (*) => ShowPage("Settings"), "settings", "Settings")
 
     ; Bottom-left: повертаємо логотип 02. Верхній логотип лишається ugta_mark.png.
     server02LogoPath := IconPath("server02_logo")
@@ -1007,13 +847,13 @@ BuildGui() {
         server02LogoPath := A_ScriptDir "\assets\icons\server02_logo.png"
     if FileExist(server02LogoPath) {
         tinted02Path := GetTintedLogoPath(server02LogoPath)
-        SafeAddPicture(Main, "x12 y650 w44 h44 BackgroundTrans", tinted02Path)
+        SafeAddPicture(Main, "x26 y592 w44 h44 BackgroundTrans", tinted02Path)
     }
 
     Main.SetFont("s8 c" Theme["muted"], "Arial")
-    Main.AddText("x64 y650 w140 h18 BackgroundTrans", "v" appVersion)
+    Main.AddText("x78 y594 w130 h18 BackgroundTrans", "v" appVersion)
     Main.SetFont("s10 bold c" Theme["text"], "Segoe UI")
-    Main.AddText("x64 y671 w150 h22 BackgroundTrans", "UGTA Tools")
+    Main.AddText("x78 y616 w130 h22 BackgroundTrans", "UGTA Tools")
 
     Main.SetFont("s17 bold c" Theme["text"], "Arial")
     Controls["PageTitle"] := Main.AddText("x265 y24 w520 h34 BackgroundTrans", "Головна")
@@ -1027,7 +867,6 @@ BuildGui() {
     Pages["Punishments"] := []
     Pages["Commands"] := []
     Pages["Monitoring"] := []
-    Pages["Radial"] := []
     Pages["Settings"] := []
 
     BuildDashboardPage()
@@ -1035,15 +874,12 @@ BuildGui() {
     BuildPunishmentsPage()
     BuildCommandsPage()
     BuildMonitoringPage()
-    BuildRadialPage()
     BuildSettingsPage()
 
     ShowPage("Dashboard")
     Main.Show("w" winW " h" winH)
     SendBackgroundToBottom()
     OnMessage(0x200, WM_MOUSEMOVE_ATOOLS)
-    OnMessage(0x100, ForceHotkeyControlKeyRead) ; WM_KEYDOWN: примусово ловить F1/F5/M тощо в Hotkey-полях
-    OnMessage(0x104, ForceHotkeyControlKeyRead) ; WM_SYSKEYDOWN: Alt + клавіші
     FadeInMainWindow()
     ApplyWindowTransparency()
     ; GDI+ shell disabled: основне вікно лишається стабільним AHK GUI. GDI+ — radial/overlay.
@@ -1189,7 +1025,6 @@ AddHero(page, x, y, w, h, title, subtitle) {
         case "Reports": iconName := "reports"
         case "Punishments": iconName := "punishments"
         case "Monitoring": iconName := "monitoring"
-        case "Radial": iconName := "radial"
         case "Settings": iconName := "settings"
     }
     AddIconPicture(Main, x + 18, y + 30, 30, 30, iconName, page)
@@ -1234,45 +1069,21 @@ ShowPage(pageName) {
         "Punishments", "Покарання",
         "Commands", "Команди",
         "Monitoring", "Моніторинг",
-        "Radial", "Радіальне меню",
         "Settings", "Налаштування"
     )
 
-    ; Швидке перемикання без мерехкотіння: ховаємо тільки стару сторінку і показуємо тільки нову.
-    ; WM_SETREDRAW вимикає зайві перемальовування під час масового Hide/Show.
-    SetMainRedraw(false)
-    try {
-        if (CurrentPage = "") {
-            ; Перший запуск: усі сторінки щойно створені й видимі, тому треба сховати всі, крім стартової.
-            for name, list in Pages {
-                if (name != pageName) {
-                    for ctrl in list
-                        try ctrl.Opt("Hidden")
-                }
-            }
-        } else if Pages.Has(CurrentPage) {
-            for ctrl in Pages[CurrentPage]
-                try ctrl.Opt("Hidden")
-        }
-        if Pages.Has(pageName) {
-            for ctrl in Pages[pageName]
-                try ctrl.Opt("-Hidden")
-        }
-        Controls["PageTitle"].Text := title.Has(pageName) ? title[pageName] : pageName
-        CurrentPage := pageName
-        UpdateNavActive(pageName)
-    } finally {
-        SetMainRedraw(true)
+    ; Стара анімація рухала кожен елемент і через це текст міг обрізатись.
+    ; Тепер сторінки не зсуваються, а ефект перемикання робиться окремою верхньою лінією.
+    for name, list in Pages {
+        for ctrl in list
+            ctrl.Opt(name = pageName ? "-Hidden" : "Hidden")
     }
-}
 
-SetMainRedraw(enable := true) {
-    global Main
-    try {
-        DllCall("SendMessage", "ptr", Main.Hwnd, "uint", 0x000B, "ptr", enable ? 1 : 0, "ptr", 0) ; WM_SETREDRAW
-        if enable
-            DllCall("RedrawWindow", "ptr", Main.Hwnd, "ptr", 0, "ptr", 0, "uint", 0x85) ; RDW_INVALIDATE|RDW_UPDATENOW|RDW_ALLCHILDREN
-    }
+    Controls["PageTitle"].Text := title[pageName]
+    CurrentPage := pageName
+    UpdateNavActive(pageName)
+
+    PageSwitchPulse()
 }
 
 UpdateNavActive(pageName) {
@@ -1310,14 +1121,8 @@ BuildDashboardPage() {
 
     AddCard("Dashboard", 265, systemY, 850, 160, "Change Log")
     Main.SetFont("s9 c" Theme["muted"], "Arial")
-    changeLogText := "v1.0.4`r`n"
-        . "Дякую усім за роботу, від вашого Святогора :)`r`n"
-        . "• Виправлено шлях до іконок і додано красиві fallback-іконки без зовнішніх файлів.`r`n"
-        . "• Прозорість переведено на стабільний layered-режим без TransColor.`r`n"
-        . "• Радіальне меню отримало нормальне поле Hotkey, як у репортах/командах.`r`n"
-        . "• Додано примусове читання F1/F5/F6/M та інших клавіш у полях біндів.`r`n"
-        . "• Команди тепер теж можна розширювати кнопкою +2 шаблони.`r`n"
-        . "`r`nПопередні правки v1.0.3:`r`n"
+    changeLogText := "v1.0.2`r`n"
+	    . "• Дякую усім за роботу. Ваш Святогор :).`r`n"
         . "• Виправлено прозорість інтерфейсу.`r`n"
         . "• Auto ID PM / F2 / підказки коректно вимикаються після закриття вікна.`r`n"
         . "• /menu відкриває/закриває меню після Enter; фон GIF/PNG/JPG.`r`n"
@@ -1444,57 +1249,36 @@ AddActionButton(page, title, x, y, callback) {
 }
 
 BuildCommandsPage() {
-    global Main, Theme, Commands, CommandKeys, CommandEditCtrls, CommandKeyCtrls, CommandKey2Ctrls, CommandVisibleCount, CommandMaxCount
+    global Main, Theme, Commands, CommandKeys, CommandEditCtrls, CommandKeyCtrls, CommandKey2Ctrls
     AddHero("Commands", 265, 98, 850, 78, "Команди", "Шаблони службових команд: команда + гаряча клавіша")
-    AddCard("Commands", 265, 200, 850, 490, "Шаблони команд")
-    AddIconPicture(Main, 285, 202, 18, 18, "commands", "Commands")
+    AddCard("Commands", 265, 200, 850, 430, "Шаблони команд")
+    AddIconPicture(Main, 285, 202, 18, 18, "hotkey", "Commands")
     Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Commands", Main.AddText("x290 y240 w760 h30 BackgroundTrans", "Вписуй команду без /. Можна забіндити F1/F6/M/Alt+R/Ctrl+R. F2/F3/F5 зарезервовані під системні дії."))
+    AddPageCtrl("Commands", Main.AddText("x290 y240 w760 h30 BackgroundTrans", "Вписуй команду без /. Можна забіндити клавішу, команда відправиться без автоматичного Enter."))
 
     CommandEditCtrls := []
     CommandKeyCtrls := []
     CommandKey2Ctrls := []
 
-    visible := Max(1, Min(CommandVisibleCount, CommandMaxCount))
-    cols := 2
-    colX := [290, 705]
+    Main.SetFont("s9 bold c" Theme["text"], "Arial")
+    AddPageCtrl("Commands", Main.AddText("x290 y278 w420 h20 BackgroundTrans", "Команда"))
+    AddPageCtrl("Commands", Main.AddText("x725 y278 w120 h20 Center BackgroundTrans", "Клавіша"))
+
     yStart := 305
-    rowH := 22
-    rows := Ceil(visible / cols)
-    idx := 1
-
-    Loop cols {
-        col := A_Index
-        Main.SetFont("s9 bold c" Theme["text"], "Arial")
-        AddPageCtrl("Commands", Main.AddText("x" colX[col] " y278 w285 h20 BackgroundTrans", "Команда"))
-        AddPageCtrl("Commands", Main.AddText("x" (colX[col] + 295) " y278 w95 h20 Center BackgroundTrans", "Клавіша"))
-
-        Loop rows {
-            if (idx > visible)
-                break
-            y := yStart + ((A_Index - 1) * rowH)
-            edit := Main.AddEdit("x" colX[col] " y" y " w285 h20 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(Commands, idx, ""))
-            hot1 := Main.AddHotkey("x" (colX[col] + 295) " y" y " w95 h20 c" Theme["text"], SafeArrayGet(CommandKeys, idx, ""))
-            AttachHotkeyNormalizer(hot1)
-            CommandEditCtrls.Push(AddPageCtrl("Commands", edit))
-            CommandKeyCtrls.Push(AddPageCtrl("Commands", hot1))
-            CommandKey2Ctrls.Push("")
-            idx++
-        }
+    Loop 12 {
+        i := A_Index
+        y := yStart + ((i - 1) * 24)
+        edit := Main.AddEdit("x290 y" y " w420 h22 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(Commands, i, ""))
+        hot1 := Main.AddHotkey("x725 y" y " w120 h22 c" Theme["text"], SafeArrayGet(CommandKeys, i, ""))
+        AttachHotkeyNormalizer(hot1)
+        CommandEditCtrls.Push(AddPageCtrl("Commands", edit))
+        CommandKeyCtrls.Push(AddPageCtrl("Commands", hot1))
+        CommandKey2Ctrls.Push("")
     }
 
     Main.SetFont("s8 c" Theme["muted"], "Arial")
-    AddPageCtrl("Commands", Main.AddText("x290 y654 w300 h20 BackgroundTrans", "Показано: " visible " / " CommandMaxCount))
-    AddTextButton("Commands", 610, 648, 120, 34, "+2 ШАБЛОНИ", (*) => AddCommandTemplates())
-    AddTextButton("Commands", 850, 648, 230, 34, "ЗБЕРЕГТИ КОМАНДИ", (*) => SaveCommands())
-}
-
-AddCommandTemplates(*) {
-    global CommandVisibleCount, CommandMaxCount, iniPath
-    CommandVisibleCount := Min(CommandMaxCount, CommandVisibleCount + 2)
-    IniWrite(CommandVisibleCount, iniPath, "Command", "VisibleCount")
-    SaveCommands()
-    Reload()
+    AddPageCtrl("Commands", Main.AddText("x290 y600 w520 h20 BackgroundTrans", "Приклади: sp, pm, resp, jail, mute, kick, unget. / ставити не треба."))
+    AddTextButton("Commands", 850, 595, 230, 34, "ЗБЕРЕГТИ КОМАНДИ", (*) => SaveCommands())
 }
 
 RunCommandButton(index) {
@@ -1502,7 +1286,7 @@ RunCommandButton(index) {
     if (CommandEditCtrls.Length >= index)
         Commands[index] := CommandEditCtrls[index].Text
     if (CommandKeyCtrls.Length >= index)
-        CommandKeys[index] := SanitizeUserHotkey(CommandKeyCtrls[index].Value, true)
+        CommandKeys[index] := NormalizeUserHotkey(CommandKeyCtrls[index].Value)
     CommandKeys2[index] := ""
     cmd := Trim(SafeArrayGet(Commands, index, ""))
     if (cmd = "")
@@ -1649,65 +1433,25 @@ FadeInMainWindow() {
     ApplyWindowTransparency()
 }
 
-ClampTransparency(value) {
-    try value := Integer(value)
-    catch
-        value := 255
-    return Max(220, Min(255, value))
-}
-
-TransparencyPercent(value) {
-    value := ClampTransparency(value)
-    return Round(value / 255 * 100) "%"
-}
-
-QueueWindowTransparencySave(*) {
-    global Controls, WindowTransparency
-    try WindowTransparency := ClampTransparency(Controls["TransparencySlider"].Value)
-    if Controls.Has("TransparencyValueText")
-        try Controls["TransparencyValueText"].Text := TransparencyPercent(WindowTransparency)
-    ApplyWindowTransparency()
-    SetTimer(SaveWindowTransparencyDebounced, -280)
-}
-
-SaveWindowTransparencyDebounced(*) {
-    global WindowTransparency, iniPath
-    WindowTransparency := ClampTransparency(WindowTransparency)
-    IniWrite(WindowTransparency, iniPath, "Theme", "WindowTransparency")
-}
-
-ApplyLayeredTransparency(hwnd, value) {
-    value := ClampTransparency(value)
-    try WinSetTransColor("Off", "ahk_id " hwnd)
-    if (value >= 255) {
-        try WinSetTransparent("Off", "ahk_id " hwnd)
-        return
-    }
-    ; Стабільний режим: тільки альфа всього вікна, без TransColor і без прозорого кліку крізь тулс.
-    try WinSetExStyle("+0x80000", "ahk_id " hwnd) ; WS_EX_LAYERED
-    try {
-        DllCall("SetLayeredWindowAttributes", "Ptr", hwnd, "UInt", 0, "UChar", value, "UInt", 0x2)
-    } catch {
-        try WinSetTransparent(value, "ahk_id " hwnd)
-    }
-}
-
 ApplyWindowTransparency() {
-    global Main, WindowTransparency, Theme, Controls
+    global Main, WindowTransparency, Theme
     if !IsObject(Main)
         return
-    value := ClampTransparency(WindowTransparency)
-    WindowTransparency := value
+
+    ; Легка прозорість як на скріні: без TransColor, щоб не було проклікування наскрізь.
+    ; Значення обмежене 220-255, щоб текст і кнопки лишались читабельними.
+    value := Max(235, Min(255, Integer(WindowTransparency)))
     try Main.BackColor := Theme["bg"]
-    if IsObject(Controls) && Controls.Has("TransparencyValueText")
-        try Controls["TransparencyValueText"].Text := TransparencyPercent(value)
-    ApplyLayeredTransparency(Main.Hwnd, value)
+    try WinSetTransColor("Off", "ahk_id " Main.Hwnd)
+    try WinSetTransparent(value, "ahk_id " Main.Hwnd)
 }
 
 ApplyTransparencyToGui(guiObj, value) {
     if !IsObject(guiObj)
         return
-    ApplyLayeredTransparency(guiObj.Hwnd, value)
+    value := Max(235, Min(255, Integer(value)))
+    try WinSetTransColor("Off", "ahk_id " guiObj.Hwnd)
+    try WinSetTransparent(value, "ahk_id " guiObj.Hwnd)
 }
 
 OverlayWindowOptions(baseOptions := "-Caption +AlwaysOnTop +ToolWindow") {
@@ -1718,12 +1462,16 @@ OverlayWindowOptions(baseOptions := "-Caption +AlwaysOnTop +ToolWindow") {
 }
 
 UseSoftPanels() {
-    return false
+    global WindowTransparency
+    return (Integer(WindowTransparency) < 255)
 }
 
 PanelColor() {
-    global Theme
-    ; Панелі більше не міняють колір під прозорість. Прозорість тепер стабільно застосовується тільки до всього вікна.
+    global Theme, WindowTransparency
+    ; При прозорості нижче 255 темні панелі стають прозорим кольором.
+    ; Текст, кнопки, поля вводу й фіолетові акценти лишаються нормальними.
+    if (Integer(WindowTransparency) < 255)
+        return "010101"
     return Theme["panel"]
 }
 
@@ -1743,169 +1491,90 @@ SaveUiBuildMode(*) {
 SaveWindowTransparency(*) {
     global Controls, WindowTransparency, iniPath
     try WindowTransparency := Controls["TransparencySlider"].Value
-    WindowTransparency := ClampTransparency(WindowTransparency)
+    WindowTransparency := Max(235, Min(255, Integer(WindowTransparency)))
     IniWrite(WindowTransparency, iniPath, "Theme", "WindowTransparency")
     ApplyWindowTransparency()
     ShowAtoolsNotice("Прозорість застосовано.")
 }
 
 
-
-BuildRadialPage() {
-    global Main, Theme, Controls, RadialCommands, RadialCtrls, RadialEnabled, RadialEnter, RadialEnabledCtrls, RadialEnterCtrls, EnableRadialMenu, RadialHotkey, RadialAutoOpenChat
+BuildSettingsPage() {
+    global Main, Theme, Name, nRank, Ranks, Controls, RadialExtraCommands, RadialExtraCtrls, RadialCommands, RadialCtrls, AppointmentDate, EnableRadialMenu, ThemeEditCtrls, BaseThemeColor, WindowTransparency, UiBuildMode
     InitRadialCommands()
 
-    AddHero("Radial", 265, 98, 850, 66, "Радіальне меню", "Окрема настройка radial: кнопка відкриття, активність слотів, команди та автоEnter")
-
-    AddCard("Radial", 265, 184, 850, 110, "Основні параметри")
-    AddIconPicture(Main, 286, 187, 18, 18, "radial", "Radial")
-    Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Radial", Main.AddText("x290 y225 w790 h20 BackgroundTrans", "Кнопка radial тепер ставиться як у репортах/командах. F2/F3/F5 зарезервовані, інші F-клавіші та M/Alt+R/Ctrl+R дозволені."))
-
-    Controls["RadialEnabledCB"] := AddPageCtrl("Radial", Main.AddCheckbox("x290 y252 w220 h24 c" Theme["text"], "Увімкнути radial-меню"))
-    Controls["RadialEnabledCB"].Value := EnableRadialMenu ? 1 : 0
-    Controls["RadialEnabledCB"].OnEvent("Click", (*) => (PlayUiClickSound(), SaveRadialToggleOnly()))
-
-    AddPageCtrl("Radial", Main.AddText("x535 y255 w105 h20 BackgroundTrans", "Кнопка:"))
-    Controls["RadialHotkeyEdit"] := AddPageCtrl("Radial", Main.AddHotkey("x610 y250 w130 h25 c" Theme["text"], RadialHotkey))
-    AttachHotkeyNormalizer(Controls["RadialHotkeyEdit"])
-    AddTextButton("Radial", 750, 248, 120, 28, "ЗЛОВИТИ", (*) => StartRadialHotkeyCapture())
-    Controls["RadialAutoOpenChatCB"] := AddPageCtrl("Radial", Main.AddCheckbox("x290 y276 w360 h22 c" Theme["text"], "Автоматично відкривати чат через T"))
-    Controls["RadialAutoOpenChatCB"].Value := RadialAutoOpenChat ? 1 : 0
-
-    AddCard("Radial", 265, 320, 850, 300, "Слоти radial-меню")
-    Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Radial", Main.AddText("x290 y360 w790 h22 BackgroundTrans", "ON = слот показується в radial. E = після вставки команда автоматично натискає Enter. Якщо авточат вимкнений, T не натискається."))
-
-    RadialCtrls := []
-    RadialEnabledCtrls := []
-    RadialEnterCtrls := []
-
-    Main.SetFont("s8 bold c" Theme["muted"], "Arial")
-    AddPageCtrl("Radial", Main.AddText("x292 y392 w55 h18 BackgroundTrans", "Слот"))
-    AddPageCtrl("Radial", Main.AddText("x350 y392 w50 h18 BackgroundTrans", "ON"))
-    AddPageCtrl("Radial", Main.AddText("x410 y392 w270 h18 BackgroundTrans", "Команда"))
-    AddPageCtrl("Radial", Main.AddText("x705 y392 w65 h18 BackgroundTrans", "Enter"))
-
-    yR := 418
-    Loop 10 {
-        i := A_Index
-        row := yR + Floor((i-1)/2)*38
-        col := Mod(i-1, 2)
-        xBase := 290 + col*410
-        keyName := i = 10 ? "0" : String(i)
-        AddPageCtrl("Radial", Main.AddText("x" xBase " y" row " w34 h24 Center Background" Theme["accent2"], keyName))
-
-        en := Main.AddCheckbox("x" (xBase+48) " y" (row+3) " w22 h20 c" Theme["text"], "")
-        en.Value := SafeArrayGet(RadialEnabled, i, true) ? 1 : 0
-        RadialEnabledCtrls.Push(AddPageCtrl("Radial", en))
-
-        if (i = 7)
-            ed := Main.AddEdit("x" (xBase+80) " y" row " w210 h24 ReadOnly Background" Theme["field"] " c" Theme["muted"], "ahouse")
-        else
-            ed := Main.AddEdit("x" (xBase+80) " y" row " w210 h24 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(RadialCommands, i, ""))
-        RadialCtrls.Push(AddPageCtrl("Radial", ed))
-
-        ent := Main.AddCheckbox("x" (xBase+305) " y" (row+3) " w60 h20 c" Theme["text"], "E")
-        ent.Value := SafeArrayGet(RadialEnter, i, false) ? 1 : 0
-        RadialEnterCtrls.Push(AddPageCtrl("Radial", ent))
-    }
-
-    AddTextButton("Radial", 290, 638, 180, 30, "ЗБЕРЕГТИ RADIAL", (*) => SaveRadialSettings())
-    AddTextButton("Radial", 480, 638, 170, 30, "ПЕРЕРЕЄСТРУВАТИ", (*) => (SaveRadialSettings(), RegisterRadialHotkey()))
-}
-
-StartRadialHotkeyCapture() {
-    global Controls
-    ShowAtoolsNotice("Натисни клавішу для radial протягом 5 секунд...")
-    try {
-        ih := InputHook("L1 T5")
-        ih.KeyOpt("{All}", "E")
-        ih.Start()
-        ih.Wait()
-        key := ""
-        if (ih.EndReason = "EndKey")
-            key := ih.EndKey
-        else if (ih.Input != "")
-            key := ih.Input
-        if (key != "") {
-            key := SanitizeUserHotkey(NormalizeCapturedHotkeyName(key), true)
-            if (key = "")
-                return
-            if Controls.Has("RadialHotkeyEdit")
-                Controls["RadialHotkeyEdit"].Value := key
-            ShowAtoolsNotice("Кнопка radial: " key ". Натисни ЗБЕРЕГТИ RADIAL.")
-        } else {
-            ShowAtoolsNotice("Кнопку не вибрано.")
-        }
-    } catch as err {
-        ShowAtoolsNotice("Не вдалося зловити клавішу. Введи її вручну.")
-        LogAtoolsError("AN-001", "Radial", "CaptureHotkey", "", err.Message)
-    }
-}
-
-NormalizeCapturedHotkeyName(key) {
-    key := Trim(String(key))
-    if (StrLen(key) = 1)
-        return StrUpper(key)
-    return key
-}
-
-BuildSettingsPage() {
-    global Main, Theme, Name, nRank, Ranks, Controls, AppointmentDate, ThemeEditCtrls, BaseThemeColor, WindowTransparency, UiBuildMode
-
-    AddHero("Settings", 265, 98, 850, 60, "Налаштування", "Профіль, шлях до гри та оформлення інтерфейсу")
+    AddHero("Settings", 265, 98, 850, 60, "Налаштування", "Профіль, шлях до гри, radial-меню та оформлення інтерфейсу")
     AddCard("Settings", 265, 180, 410, 245, "Профіль адміністратора")
-    AddCard("Settings", 265, 455, 850, 210, "Колір і фон інтерфейсу")
+    AddCard("Settings", 705, 180, 410, 315, "Radial / кнопки")
+    AddCard("Settings", 265, 515, 850, 150, "Колір і фон інтерфейсу")
     AddIconPicture(Main, 286, 183, 18, 18, "profile", "Settings")
-    AddIconPicture(Main, 286, 458, 18, 18, "palette", "Settings")
+    AddIconPicture(Main, 726, 183, 18, 18, "radial", "Settings")
+    AddIconPicture(Main, 286, 518, 18, 18, "palette", "Settings")
 
     Main.SetFont("s9 c" Theme["muted"], "Arial")
     AddPageCtrl("Settings", Main.AddText("x290 y225 w200 h20 BackgroundTrans", "NickName"))
     AddPageCtrl("Settings", Main.AddText("x290 y280 w200 h20 BackgroundTrans", "Рівень адміністратора"))
     AddPageCtrl("Settings", Main.AddText("x290 y335 w260 h20 BackgroundTrans", "Дата призначення"))
+    AddPageCtrl("Settings", Main.AddText("x730 y225 w330 h20 BackgroundTrans", "Стан radial-меню"))
+    AddPageCtrl("Settings", Main.AddText("x730 y295 w330 h34 BackgroundTrans", "Можна змінити 1-6 та 8-0. Кнопка 7 заблокована: ahouse."))
 
     Controls["NameEdit"] := AddPageCtrl("Settings", Main.AddEdit("x290 y248 w300 h25 Background" Theme["field"] " c" Theme["text"], Name))
     Controls["RankDDL"] := AddPageCtrl("Settings", Main.AddDropDownList("x290 y303 w300 Background" Theme["field"] " c" Theme["text"], Ranks))
     Controls["AppointmentDateEdit"] := AddPageCtrl("Settings", Main.AddEdit("x290 y358 w300 h25 Background" Theme["field"] " c" Theme["text"], AppointmentDate))
     Controls["RankDDL"].Choose(nRank)
 
+    Controls["RadialEnabledCB"] := AddPageCtrl("Settings", Main.AddCheckbox("x730 y248 w320 h24 c" Theme["text"], "Увімкнути radial-меню CapsLock"))
+    Controls["RadialEnabledCB"].Value := EnableRadialMenu ? 1 : 0
+    Controls["RadialEnabledCB"].OnEvent("Click", (*) => (PlayUiClickSound(), SaveRadialToggleOnly()))
+
+    RadialCtrls := []
+    yR := 335
+    Loop 10 {
+        i := A_Index
+        row := yR + Floor((i-1)/2)*28
+        col := Mod(i-1, 2)
+        xBase := 730 + col*150
+        keyName := i = 10 ? "0" : String(i)
+        AddPageCtrl("Settings", Main.AddText("x" xBase " y" row " w24 h22 Center Background" Theme["accent2"], keyName))
+        if (i = 7)
+            ed := Main.AddEdit("x" (xBase+30) " y" row " w110 h22 ReadOnly Background" Theme["field"] " c" Theme["muted"], "ahouse")
+        else
+            ed := Main.AddEdit("x" (xBase+30) " y" row " w110 h22 Background" Theme["field"] " c" Theme["text"], SafeArrayGet(RadialCommands, i, ""))
+        RadialCtrls.Push(AddPageCtrl("Settings", ed))
+    }
+
     Main.SetFont("s9 c" Theme["muted"], "Arial")
-    AddPageCtrl("Settings", Main.AddText("x290 y488 w760 h22 BackgroundTrans", "Виберіть основний колір, а ATools автоматично підлаштує меню, кнопки, поля, рамки та акценти під нього."))
+    AddPageCtrl("Settings", Main.AddText("x290 y548 w760 h22 BackgroundTrans", "Вибираєш один основний колір, а ATools сам підганяє меню, кнопки, поля, рамки та акценти під нього."))
 
     ThemeEditCtrls := Map()
-
-    Main.SetFont("s10 bold c" Theme["text"], "Arial")
-    AddPageCtrl("Settings", Main.AddText("x290 y518 w850 h18 BackgroundTrans", "Готові кольори:"))
-
-    AddThemePresetButton("8A22D6", 290, 542)
-    AddThemePresetButton("2D8CFF", 340, 542)
-    AddThemePresetButton("20B8C8", 390, 542)
-    AddThemePresetButton("25B82E", 440, 542)
-    AddThemePresetButton("FF941A", 490, 542)
-    AddThemePresetButton("F01F3A", 290, 572)
-    AddThemePresetButton("D92C9A", 340, 572)
-    AddThemePresetButton("A6A6A6", 390, 572)
-    AddThemePresetButton("050505", 440, 572)
+    AddThemePresetButton("8A22D6", 290, 572)
+    AddThemePresetButton("2D7DFF", 340, 572)
+    AddThemePresetButton("10B9C8", 390, 572)
+    AddThemePresetButton("36A81E", 440, 572)
+    AddThemePresetButton("F28C18", 490, 572)
+    AddThemePresetButton("E21835", 540, 572)
+    AddThemePresetButton("D9268F", 590, 572)
+    AddThemePresetButton("A9A9A9", 640, 572)
+    AddThemePresetButton("000000", 690, 572)
 
     Main.SetFont("s9 c" Theme["text"], "Arial")
-    AddPageCtrl("Settings", Main.AddText("x290 y610 w80 h20 BackgroundTrans", "Свій HEX:"))
-    ThemeEditCtrls["base"] := AddPageCtrl("Settings", Main.AddEdit("x370 y606 w105 h25 Background" Theme["field"] " c" Theme["text"], BaseThemeColor))
-    AddTextButton("Settings", 490, 602, 140, 30, "ЗАСТОСУВАТИ", (*) => SaveThemeSettings())
-    AddTextButton("Settings", 650, 542, 135, 28, "ФОН ТУЛСУ", (*) => SelectBackgroundFile())
-    AddTextButton("Settings", 795, 542, 110, 28, "ШЛЯХ", (*) => OpenInstallPath())
-    AddPageCtrl("Settings", Main.AddText("x650 y604 w85 h20 BackgroundTrans", "Версія UI:"))
-    Controls["UiVersionDDL"] := AddPageCtrl("Settings", Main.AddDropDownList("x735 y600 w170 Background" Theme["field"] " c" Theme["text"], ["stable 1.0.3", "unstable 1.0.3"]))
+    AddPageCtrl("Settings", Main.AddText("x290 y625 w160 h20 BackgroundTrans", "Свій HEX колір:"))
+    ThemeEditCtrls["base"] := AddPageCtrl("Settings", Main.AddEdit("x455 y610 w105 h25 Background" Theme["field"] " c" Theme["text"], BaseThemeColor))
+    AddTextButton("Settings", 575, 607, 150, 30, "ЗАСТОСУВАТИ", (*) => SaveThemeSettings())
+    AddTextButton("Settings", 745, 607, 170, 30, "ФОН ТУЛСУ", (*) => SelectBackgroundFile())
+
+    AddPageCtrl("Settings", Main.AddText("x745 y642 w110 h20 BackgroundTrans", "Версія UI:"))
+    Controls["UiVersionDDL"] := AddPageCtrl("Settings", Main.AddDropDownList("x850 y638 w170 Background" Theme["field"] " c" Theme["text"], ["stable 1.0.2", "unstable 1.0.2"]))
     Controls["UiVersionDDL"].Choose(StrLower(UiBuildMode) = "unstable" ? 2 : 1)
     Controls["UiVersionDDL"].OnEvent("Change", SaveUiBuildMode)
 
-    AddPageCtrl("Settings", Main.AddText("x950 y518 w110 h20 BackgroundTrans", "Прозорість:"))
-    Controls["TransparencyValueText"] := AddPageCtrl("Settings", Main.AddText("x1060 y518 w55 h20 Right BackgroundTrans", Round(WindowTransparency / 255 * 100) "%"))
-    Controls["TransparencySlider"] := AddPageCtrl("Settings", Main.AddSlider("x950 y545 w155 h28 Range220-255 ToolTip", WindowTransparency))
-    Controls["TransparencySlider"].OnEvent("Change", QueueWindowTransparencySave)
+    AddPageCtrl("Settings", Main.AddText("x930 y548 w170 h20 BackgroundTrans", "Прозорість інтерфейсу:"))
+    Controls["TransparencySlider"] := AddPageCtrl("Settings", Main.AddSlider("x930 y575 w155 h28 Range235-255 ToolTip", WindowTransparency))
+    Controls["TransparencySlider"].OnEvent("Change", SaveWindowTransparency)
+    AddTextButton("Settings", 930, 607, 155, 30, "ШЛЯХ", (*) => OpenInstallPath())
 
     AddTextButton("Settings", 290, 390, 145, 28, "ЗБЕРЕГТИ", (*) => SaveProfile())
     AddTextButton("Settings", 445, 390, 145, 28, "ПАПКА UGTA", (*) => SelectUGTAFolder())
+    AddTextButton("Settings", 730, 468, 285, 24, "ЗБЕРЕГТИ RADIAL", (*) => SaveRadialSettings())
 }
 
 AddThemePresetButton(hex, x, y) {
@@ -1940,7 +1609,7 @@ ShowAtoolsNotice(text, timeout := 1100) {
 ; =========================================================
 
 ReadSettings() {
-    global iniPath, Name, Rank, nRank, AppointmentDate, Commands, CommandKeys, CommandKeys2, CommandVisibleCount, CommandMaxCount, Reports, ReportKeys, ReportVisibleCount, ReportMaxCount, RadialExtraCommands, RadialCommands, RadialEnabled, RadialEnter, Ranks, EnableRadialMenu, RadialHotkey, RadialAutoOpenChat, RadialSendEnter, Theme, BaseThemeColor, ReportPanelPosX, ReportPanelPosY, CustomBgPath, F2PosX, F2PosY, BindHintsPosX, BindHintsPosY, WindowTransparency, WindowResizeEnabled, UiBuildMode, EnableF2, EnableF3, EnableReportFollow, EnableAdminChatMonitor, EnableBindHints
+    global iniPath, Name, Rank, nRank, AppointmentDate, Commands, CommandKeys, CommandKeys2, Reports, ReportKeys, ReportVisibleCount, ReportMaxCount, RadialExtraCommands, RadialCommands, Ranks, EnableRadialMenu, Theme, BaseThemeColor, ReportPanelPosX, ReportPanelPosY, CustomBgPath, F2PosX, F2PosY, BindHintsPosX, BindHintsPosY, WindowTransparency, WindowResizeEnabled, UiBuildMode
     if !FileExist(iniPath)
         return
 
@@ -1954,34 +1623,23 @@ ReadSettings() {
         Rank := Ranks[nRank]
     AppointmentDate := IniRead(iniPath, "Admin", "AppointmentDate", AppointmentDate)
 
-    Loop CommandMaxCount {
+    Loop 30 {
         i := A_Index
         Commands[i] := IniRead(iniPath, "Command", "Com" (i - 1), SafeArrayGet(Commands, i, ""))
-        CommandKeys[i] := SanitizeUserHotkey(IniRead(iniPath, "Command", "keys" (i - 1), SafeArrayGet(CommandKeys, i, "")))
-        CommandKeys2[i] := SanitizeUserHotkey(IniRead(iniPath, "Command", "keys2" (i - 1), SafeArrayGet(CommandKeys2, i, "")))
+        CommandKeys[i] := NormalizeUserHotkey(IniRead(iniPath, "Command", "keys" (i - 1), SafeArrayGet(CommandKeys, i, "")))
+        CommandKeys2[i] := NormalizeUserHotkey(IniRead(iniPath, "Command", "keys2" (i - 1), SafeArrayGet(CommandKeys2, i, "")))
         if (CommandKeys[i] = "" && CommandKeys2[i] != "")
             CommandKeys[i] := CommandKeys2[i]
     }
-    CommandVisibleCount := Max(12, Min(CommandMaxCount, Integer(IniRead(iniPath, "Command", "VisibleCount", CommandVisibleCount))))
 
     Loop 46 {
         i := A_Index
         Reports[i] := IniRead(iniPath, "Rep", "rep" (i - 1), SafeArrayGet(Reports, i, ""))
-        ReportKeys[i] := SanitizeUserHotkey(IniRead(iniPath, "Reports", "keys" (i + 29), SafeArrayGet(ReportKeys, i, "")))
+        ReportKeys[i] := NormalizeUserHotkey(IniRead(iniPath, "Reports", "keys" (i + 29), SafeArrayGet(ReportKeys, i, "")))
     }
     ReportVisibleCount := Max(26, Min(ReportMaxCount, Integer(IniRead(iniPath, "Reports", "VisibleCount", ReportVisibleCount))))
 
     EnableRadialMenu := Integer(IniRead(iniPath, "Radial", "Enabled", EnableRadialMenu ? 1 : 0)) = 1
-    RadialHotkey := SanitizeUserHotkey(IniRead(iniPath, "Radial", "Hotkey", RadialHotkey))
-    if (RadialHotkey = "")
-        RadialHotkey := "CapsLock"
-    RadialAutoOpenChat := Integer(IniRead(iniPath, "Radial", "AutoOpenChat", RadialAutoOpenChat ? 1 : 0)) = 1
-    RadialSendEnter := Integer(IniRead(iniPath, "Radial", "SendEnter", RadialSendEnter ? 1 : 0)) = 1
-    EnableF2 := Integer(IniRead(iniPath, "Monitoring", "F2", EnableF2 ? 1 : 0)) = 1
-    EnableF3 := Integer(IniRead(iniPath, "Monitoring", "F3", EnableF3 ? 1 : 0)) = 1
-    EnableReportFollow := Integer(IniRead(iniPath, "Monitoring", "ReportFollow", EnableReportFollow ? 1 : 0)) = 1
-    EnableAdminChatMonitor := Integer(IniRead(iniPath, "Monitoring", "AdminChat", EnableAdminChatMonitor ? 1 : 0)) = 1
-    EnableBindHints := Integer(IniRead(iniPath, "Monitoring", "BindHints", EnableBindHints ? 1 : 0)) = 1
     RadialExtraCommands[1] := IniRead(iniPath, "Radial", "Cmd8", RadialExtraCommands[1])
     RadialExtraCommands[2] := IniRead(iniPath, "Radial", "Cmd9", RadialExtraCommands[2])
     RadialExtraCommands[3] := IniRead(iniPath, "Radial", "Cmd0", RadialExtraCommands[3])
@@ -2002,9 +1660,6 @@ ReadSettings() {
     Loop 10 {
         oldCmd := SafeArrayGet(RadialCommands, A_Index, "")
         RadialCommands[A_Index] := IniRead(iniPath, "Radial", "Cmd" A_Index, oldCmd)
-        RadialEnabled[A_Index] := Integer(IniRead(iniPath, "Radial", "Enabled" A_Index, SafeArrayGet(RadialEnabled, A_Index, true) ? 1 : 0)) = 1
-        defaultEnter := (A_Index = 7) ? 1 : (SafeArrayGet(RadialEnter, A_Index, false) ? 1 : 0)
-        RadialEnter[A_Index] := Integer(IniRead(iniPath, "Radial", "Enter" A_Index, defaultEnter)) = 1
     }
     RadialCommands[7] := "ahouse"
 }
@@ -2027,17 +1682,16 @@ SaveProfile() {
 
 
 SaveCommands() {
-    global iniPath, Commands, CommandKeys, CommandKeys2, CommandEditCtrls, CommandKeyCtrls, CommandKey2Ctrls, CommandVisibleCount
+    global iniPath, Commands, CommandKeys, CommandKeys2, CommandEditCtrls, CommandKeyCtrls, CommandKey2Ctrls
     Loop CommandEditCtrls.Length {
         i := A_Index
         Commands[i] := CommandEditCtrls[i].Text
-        CommandKeys[i] := (CommandKeyCtrls.Length >= i) ? SanitizeUserHotkey(CommandKeyCtrls[i].Value, true) : ""
+        CommandKeys[i] := (CommandKeyCtrls.Length >= i) ? NormalizeUserHotkey(CommandKeyCtrls[i].Value) : ""
         CommandKeys2[i] := ""
         IniWrite(Commands[i], iniPath, "Command", "Com" (i - 1))
         IniWrite(CommandKeys[i], iniPath, "Command", "keys" (i - 1))
         IniWrite("", iniPath, "Command", "keys2" (i - 1))
     }
-    IniWrite(CommandVisibleCount, iniPath, "Command", "VisibleCount")
     RegisterAllUserHotkeys()
     ShowAtoolsNotice("Команди збережено.")
 }
@@ -2046,7 +1700,7 @@ SaveReports() {
     Loop ReportEditCtrls.Length {
         i := A_Index
         Reports[i] := ReportEditCtrls[i].Text
-        ReportKeys[i] := SanitizeUserHotkey(ReportKeyCtrls[i].Value, true)
+        ReportKeys[i] := NormalizeUserHotkey(ReportKeyCtrls[i].Value)
         IniWrite(Reports[i], iniPath, "Rep", "rep" (i - 1))
         IniWrite(ReportKeys[i], iniPath, "Reports", "keys" (i + 29))
     }
@@ -2061,7 +1715,6 @@ SaveRadialToggleOnly() {
 
     EnableRadialMenu := Controls.Has("RadialEnabledCB") ? (Controls["RadialEnabledCB"].Value = 1) : EnableRadialMenu
     IniWrite(EnableRadialMenu ? 1 : 0, iniPath, "Radial", "Enabled")
-    RegisterRadialHotkey()
 
     if (!EnableRadialMenu && IsObject(RadialGui)) {
         try RadialGui.Destroy()
@@ -2071,28 +1724,17 @@ SaveRadialToggleOnly() {
 }
 
 SaveRadialSettings() {
-    global iniPath, RadialCommands, RadialCtrls, RadialEnabled, RadialEnter, RadialEnabledCtrls, RadialEnterCtrls, EnableRadialMenu, RadialHotkey, RadialAutoOpenChat, Controls
+    global iniPath, RadialCommands, RadialCtrls, EnableRadialMenu, Controls
     InitRadialCommands()
     Loop 10 {
         if (A_Index = 7)
             RadialCommands[A_Index] := "ahouse"
         else if (RadialCtrls.Length >= A_Index)
             RadialCommands[A_Index] := RadialCtrls[A_Index].Text
-        RadialEnabled[A_Index] := (IsObject(RadialEnabledCtrls) && RadialEnabledCtrls.Length >= A_Index) ? (RadialEnabledCtrls[A_Index].Value = 1) : SafeArrayGet(RadialEnabled, A_Index, true)
-        RadialEnter[A_Index] := (IsObject(RadialEnterCtrls) && RadialEnterCtrls.Length >= A_Index) ? (RadialEnterCtrls[A_Index].Value = 1) : SafeArrayGet(RadialEnter, A_Index, false)
         IniWrite(RadialCommands[A_Index], iniPath, "Radial", "Cmd" A_Index)
-        IniWrite(RadialEnabled[A_Index] ? 1 : 0, iniPath, "Radial", "Enabled" A_Index)
-        IniWrite(RadialEnter[A_Index] ? 1 : 0, iniPath, "Radial", "Enter" A_Index)
     }
     EnableRadialMenu := Controls.Has("RadialEnabledCB") ? (Controls["RadialEnabledCB"].Value = 1) : EnableRadialMenu
-    RadialHotkey := Controls.Has("RadialHotkeyEdit") ? SanitizeUserHotkey(Controls["RadialHotkeyEdit"].Value, true) : RadialHotkey
-    if (RadialHotkey = "")
-        RadialHotkey := "CapsLock"
-    RadialAutoOpenChat := Controls.Has("RadialAutoOpenChatCB") ? (Controls["RadialAutoOpenChatCB"].Value = 1) : RadialAutoOpenChat
     IniWrite(EnableRadialMenu ? 1 : 0, iniPath, "Radial", "Enabled")
-    IniWrite(RadialHotkey, iniPath, "Radial", "Hotkey")
-    IniWrite(RadialAutoOpenChat ? 1 : 0, iniPath, "Radial", "AutoOpenChat")
-    RegisterRadialHotkey()
     ShowAtoolsNotice("Radial збережено.")
 }
 
@@ -2133,23 +1775,14 @@ ApplyThemeFromBase(base) {
     global Theme, BaseThemeColor
     base := NormalizeHexColor(base, "8A22D6")
     BaseThemeColor := base
-    
-    ; Перевірка на дуже темні кольори (чорний #050505, #111111, #000000)
-    ; Для них accent залишаємо темним, але sidebar робимо світлішим для контрасту
-    r := Integer("0x" SubStr(base, 1, 2))
-    g := Integer("0x" SubStr(base, 3, 2))
-    b := Integer("0x" SubStr(base, 5, 2))
-    lum := Round((r * 0.299) + (g * 0.587) + (b * 0.114))
-    
-    if (lum < 30) {
-        ; Дуже темний колір — спеціальна обробка
-        Theme["accent"] := "050505"
-        Theme["accent2"] := "1A1A1A"
-        Theme["sidebar"] := "121212"
-        Theme["panel2"] := "1A1A1A"
-        Theme["field"] := "252525"
-        Theme["line"] := "333333"
-        Theme["muted"] := "BBBBBB"
+    if (base = "000000") {
+        Theme["accent"] := "000000"
+        Theme["accent2"] := "111111"
+        Theme["sidebar"] := "050505"
+        Theme["panel2"] := "0A0A0A"
+        Theme["field"] := "101010"
+        Theme["line"] := "202020"
+        Theme["muted"] := "D8D8D8"
     } else {
         Theme["accent"] := base
         Theme["accent2"] := ShadeHex(base, -18)
@@ -2253,90 +1886,37 @@ RegisterAllUserHotkeys() {
     }
     oldKeys := []
 
-    ResetHotkeyLog()
     seen := Map()
-
-    ; Репорти реєструються першими. Вони мають пріоритет над командами.
-    Loop ReportKeys.Length {
-        i := A_Index
-        callback := RunReportHotkey.Bind(i)
-        RegisterUserHotkeyVariants(SafeArrayGet(ReportKeys, i, ""), callback, oldKeys, seen, "Reports", "Report " i)
-    }
-
-    ; Команди реєструються після репортів. Якщо бінд дублюється — команда пропускається, а репорт лишається робочим.
     Loop CommandKeys.Length {
         i := A_Index
         callback := RunCommandHotkey.Bind(i)
-        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys, i, ""), callback, oldKeys, seen, "Commands", "Command " i)
-        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys2, i, ""), callback, oldKeys, seen, "Commands", "Command secondary " i)
+        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys, i, ""), callback, oldKeys, seen)
+        RegisterUserHotkeyVariants(SafeArrayGet(CommandKeys2, i, ""), callback, oldKeys, seen)
+    }
+
+    Loop ReportKeys.Length {
+        i := A_Index
+        callback := RunReportHotkey.Bind(i)
+        RegisterUserHotkeyVariants(SafeArrayGet(ReportKeys, i, ""), callback, oldKeys, seen)
     }
 }
 
-RegisterUserHotkeyVariants(key, callback, registeredKeys, seen, moduleName := "Unknown", itemName := "") {
-    key := SanitizeUserHotkey(key)
+RegisterUserHotkeyVariants(key, callback, registeredKeys, seen) {
+    key := NormalizeUserHotkey(key)
     if (key = "")
-        return false
+        return
 
-    ok := false
     for _, variant in ExpandHotkeyVariants(key) {
         registeredKey := PrepareRegisteredHotkey(variant)
-        if (registeredKey = "")
-            continue
         seenKey := StrLower(registeredKey)
-        if (seen.Has(seenKey)) {
-            owner := seen[seenKey]
-            ownerText := owner.Has("module") ? owner["module"] : "Unknown"
-            if (owner.Has("item") && owner["item"] != "")
-                ownerText .= " / " owner["item"]
-            LogAtoolsError("AN-001", "Hotkeys", "RegisterHotkey", registeredKey, "Hotkey skipped. " moduleName " / " itemName " conflicts with " ownerText ".")
-            WriteHotkeyLog("[" moduleName "] " key " -> skipped, conflict with " ownerText)
+        if (seen.Has(seenKey))
             continue
-        }
         try {
             Hotkey(registeredKey, callback, "On")
             registeredKeys.Push(registeredKey)
-            seen[seenKey] := Map("module", moduleName, "item", itemName)
-            WriteHotkeyLog("[" moduleName "] " key " -> registered as " registeredKey)
-            ok := true
-        } catch as err {
-            LogAtoolsError("AN-001", "Hotkeys", "RegisterHotkey", registeredKey, err.Message)
-            WriteHotkeyLog("[" moduleName "] " key " -> failed: " err.Message)
+            seen[seenKey] := true
         }
     }
-    return ok
-}
-
-EnsureLogsDir() {
-    global LogDir
-    try DirCreate(LogDir)
-}
-
-LogAtoolsError(code, module, action, hotkey := "", message := "") {
-    global LogDir, appVersion
-    EnsureLogsDir()
-    line := "[ATools Error]`r`n"
-        . "Version: " appVersion "`r`n"
-        . "Date: " FormatTime(A_Now, "dd.MM.yyyy HH:mm:ss") "`r`n"
-        . "Code: " code "`r`n"
-        . "Module: " module "`r`n"
-        . "Action: " action "`r`n"
-        . "Hotkey: " hotkey "`r`n"
-        . "Message: " message "`r`n`r`n"
-    try FileAppend(line, LogDir "\error.log", "UTF-8")
-}
-
-ResetHotkeyLog() {
-    global LogDir, appVersion
-    EnsureLogsDir()
-    text := "[ATools Hotkeys]`r`nDate: " FormatTime(A_Now, "dd.MM.yyyy HH:mm:ss") "`r`nVersion: " appVersion "`r`n`r`n"
-    try FileDelete(LogDir "\hotkeys.log")
-    try FileAppend(text, LogDir "\hotkeys.log", "UTF-8")
-}
-
-WriteHotkeyLog(message) {
-    global LogDir
-    EnsureLogsDir()
-    try FileAppend(message "`r`n", LogDir "\hotkeys.log", "UTF-8")
 }
 
 PrepareRegisteredHotkey(key) {
@@ -2363,14 +1943,6 @@ ExpandHotkeyVariants(key) {
     } else {
         PushUniqueHotkey(variants, key)
     }
-
-    ; Примусове бачення клавіш у MTA: додаємо фізичний SC-код як дубль.
-    ; Це допомагає для F1/F2/F3/F4, M/E/N/U та інших літер, якщо гра/розкладка не віддає звичайну назву клавіші.
-    physAliases := PhysicalKeyAliases()
-    if (physAliases.Has(baseLower)) {
-        for _, alias in physAliases[baseLower]
-            PushUniqueHotkey(variants, prefix alias)
-    }
     return variants
 }
 
@@ -2384,9 +1956,7 @@ PushUniqueHotkey(arr, key) {
 }
 
 AttachHotkeyNormalizer(ctrl) {
-    global HotkeyCaptureCtrls
     try ctrl.OnEvent("Change", NormalizeHotkeyControl)
-    try HotkeyCaptureCtrls[ctrl.Hwnd] := ctrl
 }
 
 NormalizeHotkeyControl(ctrl, *) {
@@ -2394,94 +1964,10 @@ NormalizeHotkeyControl(ctrl, *) {
     catch
         return
 
-    normalized := SanitizeUserHotkey(NormalizePhysicalNumpadCapture(key), true)
-    if (normalized != key) {
+    normalized := NormalizePhysicalNumpadCapture(key)
+    if (normalized != "" && normalized != key) {
         try ctrl.Value := normalized
     }
-}
-
-IsAtoolsHotkeyControlFocused() {
-    global HotkeyCaptureCtrls
-    if !IsObject(HotkeyCaptureCtrls)
-        return false
-    try {
-        hwnd := DllCall("GetFocus", "Ptr")
-    } catch {
-        return false
-    }
-    return (hwnd && HotkeyCaptureCtrls.Has(hwnd))
-}
-
-ForceHotkeyControlKeyRead(wParam, lParam, msg, hwnd) {
-    global HotkeyCaptureCtrls
-    if !IsObject(HotkeyCaptureCtrls)
-        return
-    if !HotkeyCaptureCtrls.Has(hwnd) {
-        try {
-            focusHwnd := DllCall("GetFocus", "Ptr")
-        } catch {
-            focusHwnd := 0
-        }
-        if (focusHwnd && HotkeyCaptureCtrls.Has(focusHwnd))
-            hwnd := focusHwnd
-        else
-            return
-    }
-
-    vk := Integer(wParam)
-    sc := (Integer(lParam) >> 16) & 0x1FF
-    key := ForcedHotkeyNameFromVkSc(vk, sc)
-    if (key = "")
-        return
-
-    ; Не записуємо чисті модифікатори як окрему клавішу.
-    lower := StrLower(key)
-    if (lower = "ctrl" || lower = "control" || lower = "lctrl" || lower = "rctrl" || lower = "shift" || lower = "lshift" || lower = "rshift" || lower = "alt" || lower = "lalt" || lower = "ralt" || lower = "lwin" || lower = "rwin")
-        return 0
-
-    prefix := ""
-    if GetKeyState("Ctrl", "P")
-        prefix .= "^"
-    if GetKeyState("Alt", "P")
-        prefix .= "!"
-    if GetKeyState("Shift", "P")
-        prefix .= "+"
-    if GetKeyState("LWin", "P") || GetKeyState("RWin", "P")
-        prefix .= "#"
-
-    key := SanitizeUserHotkey(prefix key, true)
-    if (key = "")
-        return 0
-
-    ctrl := HotkeyCaptureCtrls[hwnd]
-    try ctrl.Value := key
-    return 0
-}
-
-ForcedHotkeyNameFromVkSc(vk, sc) {
-    if (vk >= 0x70 && vk <= 0x7B)
-        return "F" (vk - 0x6F)
-    if (vk >= 0x41 && vk <= 0x5A)
-        return Chr(vk)
-    if (vk >= 0x30 && vk <= 0x39)
-        return Chr(vk)
-    if (vk >= 0x60 && vk <= 0x69)
-        return "Numpad" (vk - 0x60)
-
-    static vkNames := Map(
-        0x08, "Backspace", 0x09, "Tab", 0x0D, "Enter", 0x1B, "Esc", 0x20, "Space",
-        0x21, "PgUp", 0x22, "PgDn", 0x23, "End", 0x24, "Home", 0x25, "Left", 0x26, "Up", 0x27, "Right", 0x28, "Down",
-        0x2D, "Insert", 0x2E, "Delete", 0x6A, "NumpadMult", 0x6B, "NumpadAdd", 0x6D, "NumpadSub", 0x6E, "NumpadDot", 0x6F, "NumpadDiv"
-    )
-    if vkNames.Has(vk)
-        return vkNames[vk]
-
-    try {
-        name := GetKeyName(Format("vk{:02X}sc{:03X}", vk, sc))
-        if (name != "")
-            return name
-    }
-    return ""
 }
 
 NormalizePhysicalNumpadCapture(key) {
@@ -2581,28 +2067,6 @@ NumpadKeyAliases() {
     return aliases
 }
 
-
-PhysicalKeyAliases() {
-    static aliases := ""
-    if !IsObject(aliases) {
-        aliases := Map(
-            "a", ["SC01E"], "b", ["SC030"], "c", ["SC02E"], "d", ["SC020"],
-            "e", ["SC012"], "f", ["SC021"], "g", ["SC022"], "h", ["SC023"],
-            "i", ["SC017"], "j", ["SC024"], "k", ["SC025"], "l", ["SC026"],
-            "m", ["SC032"], "n", ["SC031"], "o", ["SC018"], "p", ["SC019"],
-            "q", ["SC010"], "r", ["SC013"], "s", ["SC01F"], "t", ["SC014"],
-            "u", ["SC016"], "v", ["SC02F"], "w", ["SC011"], "x", ["SC02D"],
-            "y", ["SC015"], "z", ["SC02C"],
-            "f1", ["SC03B"], "f2", ["SC03C"], "f3", ["SC03D"], "f4", ["SC03E"],
-            "f5", ["SC03F"], "f6", ["SC040"], "f7", ["SC041"], "f8", ["SC042"],
-            "f9", ["SC043"], "f10", ["SC044"], "f11", ["SC057"], "f12", ["SC058"],
-            "capslock", ["SC03A"], "space", ["SC039"], "tab", ["SC00F"],
-            "enter", ["SC01C"], "esc", ["SC001"], "escape", ["SC001"]
-        )
-    }
-    return aliases
-}
-
 NumpadDisplayName(key) {
     static names := ""
     if !IsObject(names) {
@@ -2636,74 +2100,12 @@ NumpadDisplayName(key) {
     return names.Has(keyLower) ? names[keyLower] : ""
 }
 
-IsSameBareHotkey(key, target) {
-    key := NormalizeUserHotkey(key)
-    target := StrLower(NormalizeUserHotkey(target))
-    if (key = "" || target = "")
-        return false
-    base := HotkeyBaseName(key)
-    prefix := SubStr(key, 1, StrLen(key) - StrLen(base))
-    return (prefix = "" && StrLower(base) = target)
-}
-
-IsUserBareHotkeyAssigned(keyName) {
-    global ReportKeys, CommandKeys, CommandKeys2, RadialHotkey
-    target := StrLower(NormalizeUserHotkey(keyName))
-    if (target = "")
-        return false
-
-    for _, key in ReportKeys
-        if IsSameBareHotkey(key, target)
-            return true
-    for _, key in CommandKeys
-        if IsSameBareHotkey(key, target)
-            return true
-    for _, key in CommandKeys2
-        if IsSameBareHotkey(key, target)
-            return true
-    if IsSameBareHotkey(RadialHotkey, target)
-        return true
-    return false
-}
-
-IsReservedUserHotkey(key) {
-    key := NormalizeUserHotkey(key)
-    if (key = "")
-        return false
-    base := StrLower(HotkeyBaseName(key))
-    prefix := SubStr(key, 1, StrLen(key) - StrLen(HotkeyBaseName(key)))
-    ; F2/F3/F5 лишаємо під системні залежні функції. З модифікаторами можна використовувати.
-    return (prefix = "" && (base = "f2" || base = "f3" || base = "f5"))
-}
-
-SanitizeUserHotkey(key, showNotice := false) {
-    key := NormalizeUserHotkey(key)
-    if (key = "")
-        return ""
-    if IsReservedUserHotkey(key) {
-        if showNotice
-            ShowAtoolsNotice("F2, F3 та F5 зарезервовані під системні функції.")
-        return ""
-    }
-    return key
-}
-
 NormalizeUserHotkey(key) {
     key := Trim(String(key))
     if (key = "")
         return ""
     key := StrReplace(key, " ", "")
     key := StrReplace(key, "$", "")
-
-    ; Дозволяємо вводити гарячі клавіші людським текстом: Ctrl+M / Alt+R / Shift+F6.
-    key := RegExReplace(key, "i)^(Ctrl|Control)\+", "^")
-    key := RegExReplace(key, "i)^Alt\+", "!")
-    key := RegExReplace(key, "i)^Shift\+", "+")
-    key := RegExReplace(key, "i)^(Win|Windows)\+", "#")
-    key := RegExReplace(key, "i)^Num(\d)$", "Numpad$1")
-    key := RegExReplace(key, "i)^NumPad", "Numpad")
-    key := RegExReplace(key, "i)^(Mouse4|X1)$", "XButton1")
-    key := RegExReplace(key, "i)^(Mouse5|X2)$", "XButton2")
     return key
 }
 
@@ -2740,43 +2142,24 @@ ReleaseHotkeyModifiers() {
 }
 
 SendCommandText(cmd) {
-    SendCommandTextEx(cmd, false, true, true)
+    SendCommandTextEx(cmd, false)
 }
 
-SendCommandTextEx(cmd, autoEnter := false, openChat := true, addSlash := true) {
-    cmd := Trim(String(cmd))
-    if (cmd = "")
-        return
-
+SendCommandTextEx(cmd, autoEnter := false) {
+    cmd := RegExReplace(cmd, "^/+")
     hWnd := FindGameWindow()
     if hWnd {
         WinActivate("ahk_id " hWnd)
-        WinWaitActive("ahk_id " hWnd, , 0.25)
-        Sleep(8)
+        WinWaitActive("ahk_id " hWnd, , 1)
+        Sleep(80)
     }
     ReleaseHotkeyModifiers()
-
-    if openChat {
-        SendEvent("{sc014}") ; T в MTA. На кирилиці може виглядати як "е".
-        Sleep(16)
-    }
-
-    if addSlash {
-        cmd := RegExReplace(cmd, "^/+")
-        outText := "/" cmd
-    } else {
-        outText := cmd
-    }
-
-    if !autoEnter
-        outText .= " "
-
-    try SendText(outText)
-    catch as err {
-        LogAtoolsError("AN-005", "Commands", "SendCommandTextEx", "", err.Message)
-        return
-    }
-
+    SendEvent("{sc014}")
+    Sleep(100)
+    if autoEnter
+        SendText("/" cmd)
+    else
+        SendText("/" cmd " ")
     if autoEnter
         SendEvent("{Enter}")
 }
@@ -3000,11 +2383,7 @@ GetUnansweredReportsSoundKey() {
 }
 
 HandleCapsLockDown() {
-    global EnableRadialMenu, RadialHotkey
-    if (StrLower(NormalizeUserHotkey(RadialHotkey)) != "capslock") {
-        SetCapsLockState(!GetKeyState("CapsLock", "T"))
-        return
-    }
+    global EnableRadialMenu
     if (!EnableRadialMenu) {
         SetCapsLockState(!GetKeyState("CapsLock", "T"))
         return
@@ -3013,60 +2392,10 @@ HandleCapsLockDown() {
 }
 
 HandleCapsLockUp() {
-    global EnableRadialMenu, RadialHotkey
-    if (StrLower(NormalizeUserHotkey(RadialHotkey)) != "capslock")
-        return
-    if (!EnableRadialMenu)
-        return
-    ExecuteRadialMenu()
-}
-
-HandleRadialHotkeyDown(*) {
-    global EnableRadialMenu
-    if (!EnableRadialMenu)
-        return
-    ShowRadialMenu()
-}
-
-HandleRadialHotkeyUp(*) {
     global EnableRadialMenu
     if (!EnableRadialMenu)
         return
     ExecuteRadialMenu()
-}
-
-RegisterRadialHotkey() {
-    global RadialHotkey, RegisteredRadialHotkeys
-    for _, key in RegisteredRadialHotkeys {
-        if (key != "")
-            try Hotkey(key, "Off")
-    }
-    RegisteredRadialHotkeys := []
-
-    key := SanitizeUserHotkey(RadialHotkey)
-    if (key = "" || StrLower(key) = "capslock")
-        return
-
-    ok := false
-    for _, variant in ExpandHotkeyVariants(key) {
-        downKey := PrepareRegisteredHotkey(variant)
-        if (downKey = "")
-            continue
-        upKey := downKey " Up"
-        try {
-            Hotkey(downKey, HandleRadialHotkeyDown, "On")
-            Hotkey(upKey, HandleRadialHotkeyUp, "On")
-            RegisteredRadialHotkeys.Push(downKey)
-            RegisteredRadialHotkeys.Push(upKey)
-            WriteHotkeyLog("[Radial] " key " -> registered as " downKey)
-            ok := true
-        } catch as err {
-            LogAtoolsError("AN-001", "Radial", "RegisterHotkey", downKey, err.Message)
-            WriteHotkeyLog("[Radial] " key " -> failed as " downKey ": " err.Message)
-        }
-    }
-    if (!ok)
-        ShowAtoolsNotice("Не вдалося зареєструвати кнопку radial: " key ". Перевір logs/error.log")
 }
 
 ; =========================================================
@@ -3090,7 +2419,7 @@ ToggleFeature(name) {
 }
 
 SetFeature(name, enable) {
-    global EnableF2, EnableF3, EnableReportFollow, EnableBindHints, EnableAdminChatMonitor, iniPath
+    global EnableF2, EnableF3, EnableReportFollow, EnableBindHints, EnableAdminChatMonitor
     enable := enable ? true : false
     switch name {
         case "F2":
@@ -3113,7 +2442,6 @@ SetFeature(name, enable) {
             ToggleBindHints(enable)
     }
     SetMonitorCheck(name, enable)
-    try IniWrite(enable ? 1 : 0, iniPath, "Monitoring", name)
 }
 
 SetMonitorCheck(name, enable) {
@@ -3139,8 +2467,6 @@ OpenChatsMenu(*) {
 
 TrackMenuHotChars(ch) {
     global MenuHotSeq, MenuHotLastTick
-    if GetKeyState("Ctrl", "P") || GetKeyState("Alt", "P")
-        return
     now := A_TickCount
     if (now - MenuHotLastTick > 2200)
         MenuHotSeq := ""
@@ -3167,11 +2493,6 @@ SubmitMenuHotChars(*) {
 ResetMenuHotChars(*) {
     global MenuHotSeq
     MenuHotSeq := ""
-}
-
-ShowDisabledHotkeyTip(text) {
-    ToolTip(text)
-    SetTimer(() => ToolTip(), -1500)
 }
 
 IsGuiAlive(guiObj) {
@@ -3507,10 +2828,8 @@ FindLastVipChatLines(maxLines := 12) {
 
 AcceptLastAdminForm() {
     global EnableF2, AcceptedFormKeys, FormSeenTicks
-    if !EnableF2 {
-        ShowDisabledHotkeyTip("F2 вимкнено. Увімкніть модуль у Моніторинг.")
+    if !EnableF2
         return
-    }
 
     info := FindLastAdminFormInfo()
     if !IsObject(info)
@@ -3678,10 +2997,8 @@ SendAdminConflictNotice(commandText) {
 }
 AutoPmLastReport() {
     global EnableF3, LastPmId
-    if !EnableF3 {
-        ShowDisabledHotkeyTip("F3 вимкнено. Увімкніть AutoID PM у Моніторинг.")
+    if !EnableF3
         return
-    }
 
     id := ReportPanelGetActiveId()
     if (id = "")
@@ -3698,10 +3015,8 @@ AutoPmLastReport() {
 
 RepeatLastPmId() {
     global EnableF3, LastPmId
-    if !EnableF3 {
-        ShowDisabledHotkeyTip("F4 вимкнено. Увімкніть AutoID PM у Моніторинг.")
+    if !EnableF3
         return
-    }
 
     id := ReportPanelGetActiveId()
     if (id = "")
@@ -4724,14 +4039,12 @@ FirstToken(textValue, fallback := "CMD") {
 }
 
 BuildRadialItems() {
-    global RadialCommands, RadialCtrls, RadialEnabled, RadialEnter
+    global RadialCommands, RadialCtrls
     InitRadialCommands()
     defaults := ["resp", "sp", "pm", "jail", "mute", "kick", "ahouse", "", "", ""]
     items := []
     Loop 10 {
         i := A_Index
-        if (!SafeArrayGet(RadialEnabled, i, true))
-            continue
         cmd := ""
         if IsObject(RadialCtrls) && RadialCtrls.Length >= i {
             try cmd := Trim(RadialCtrls[i].Text)
@@ -4743,12 +4056,10 @@ BuildRadialItems() {
         if (i = 7)
             cmd := "ahouse"
         clean := RegExReplace(String(cmd), "^/+")
-        if (Trim(clean) = "")
-            continue
         label := StrUpper(FirstToken(clean, "CMD"))
         if (StrLen(label) > 8)
             label := SubStr(label, 1, 8)
-        items.Push(Map("label", label, "cmd", clean, "enter", SafeArrayGet(RadialEnter, i, false), "slot", i))
+        items.Push(Map("label", label, "cmd", clean, "enter", i = 7))
     }
     return items
 }
@@ -4772,11 +4083,6 @@ ShowRadialMenu() {
     EnableRadialWheelHotkeys()
     RadialRadius := 170
     RadialItems := BuildRadialItems()
-    if (!IsObject(RadialItems) || RadialItems.Length = 0) {
-        RadialActive := false
-        ShowAtoolsNotice("У radial немає активних команд. Увімкни хоча б один слот у Налаштуваннях.")
-        return
-    }
 
     RadialGui := Gui("-Caption +AlwaysOnTop +ToolWindow +E0x80000 +E0x20", "Atools Radial")
     RadialGui.BackColor := "010101"
@@ -4818,13 +4124,24 @@ RadialWheel(direction) {
 }
 
 EnableRadialWheelHotkeys() {
-    ; WheelUp/WheelDown вже оголошені в #HotIf IsRadialActive().
-    ; Динамічний HotIf тут не потрібен і може давати зайві збої.
-    return
+    global RadialActive
+    if (!RadialActive)
+        return
+    try {
+        HotIf('RadialActive')
+        Hotkey('WheelUp', 'On')
+        Hotkey('WheelDown', 'On')
+        HotIf()
+    }
 }
 
 DisableRadialWheelHotkeys() {
-    return
+    try {
+        HotIf('RadialActive')
+        Hotkey('WheelUp', 'Off')
+        Hotkey('WheelDown', 'Off')
+        HotIf()
+    }
 }
 RadialCycle(direction) {
     global RadialSelected, RadialItems
@@ -4846,7 +4163,7 @@ RadialChoose(cmd) {
 }
 
 ExecuteRadialMenu() {
-    global RadialGui, RadialSelected, RadialItems, RadialPic, RadialActive, RadialSelectedLabel, RadialOptionCtrls, EnableRadialMenu, RadialAutoOpenChat
+    global RadialGui, RadialSelected, RadialItems, RadialPic, RadialActive, RadialSelectedLabel, RadialOptionCtrls, EnableRadialMenu
     if (!EnableRadialMenu) {
         RadialActive := false
         return
@@ -4868,7 +4185,7 @@ ExecuteRadialMenu() {
     if (idx is Integer && idx >= 1 && idx <= RadialItems.Length) {
         item := RadialItems[idx]
         autoEnter := item.Has("enter") ? item["enter"] : false
-        SendCommandTextEx(item["cmd"], autoEnter, RadialAutoOpenChat, true)
+        SendCommandTextEx(item["cmd"], autoEnter)
     }
 }
 
@@ -5241,8 +4558,8 @@ class AppConfig {
     }
 
     static Escape(value) {
-        value := StrReplace(value, "", "")
-        value := StrReplace(value, Chr(34), "" . Chr(34))
+        value := StrReplace(value, "\", "\")
+        value := StrReplace(value, Chr(34), "\" . Chr(34))
         value := StrReplace(value, "`r", "")
         value := StrReplace(value, "`n", "\n")
         return value
